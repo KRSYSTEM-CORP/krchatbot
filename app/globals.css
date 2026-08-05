@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-bubble-in: var(--bubble-in);
+  --color-bubble-out: var(--bubble-out);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+/* Índigo de marca de la familia KR System sobre un fondo frío y neutro: la
+   bandeja se mira durante horas seguidas y el blush cálido de KR Citas cansa
+   la vista en una pantalla de conversaciones. Las burbujas toman prestada la
+   lógica de WhatsApp (entrante clara, saliente teñida) porque es la que el ojo
+   de cualquier agente ya tiene aprendida. */
+:root {
+  --background: #f7f8fb;
+  --foreground: #16181f;
+  --card: #ffffff;
+  --card-foreground: #16181f;
+  --popover: #ffffff;
+  --popover-foreground: #16181f;
+  --primary: #4f3ddb;
+  --primary-foreground: #ffffff;
+  --secondary: #eceafb;
+  --secondary-foreground: #35299b;
+  --muted: #eef0f6;
+  --muted-foreground: #646b7d;
+  --accent: #eceafb;
+  --accent-foreground: #35299b;
+  --destructive: #c43d3d;
+  --success: #1f7a4d;
+  --success-foreground: #ffffff;
+  --warning: #b8790f;
+  --warning-foreground: #ffffff;
+  --border: #e2e5ee;
+  --input: #e2e5ee;
+  --ring: #4f3ddb;
+  --bubble-in: #ffffff;
+  --bubble-out: #e4f6e9;
+  --radius: 0.75rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #12141a;
+    --foreground: #eceef4;
+    --card: #1a1d26;
+    --card-foreground: #eceef4;
+    --popover: #1a1d26;
+    --popover-foreground: #eceef4;
+    --primary: #8b7cf0;
+    --primary-foreground: #12141a;
+    --secondary: #262a38;
+    --secondary-foreground: #cfc9f7;
+    --muted: #222633;
+    --muted-foreground: #9aa2b6;
+    --accent: #262a38;
+    --accent-foreground: #cfc9f7;
+    --destructive: #e07070;
+    --success: #4ec98a;
+    --success-foreground: #12141a;
+    --warning: #e0a94a;
+    --warning-foreground: #12141a;
+    --border: #2b3040;
+    --input: #2b3040;
+    --ring: #8b7cf0;
+    --bubble-in: #1f2430;
+    --bubble-out: #1d3b2c;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* La bandeja tiene columnas con scroll propio. Sin esto el scroll se lo lleva
+   la página entera y la lista de chats se va con él. */
+.pane-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.pane-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.pane-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+
+/* Área segura de iOS: sin esto la caja de escritura queda debajo de la barra
+   de gestos cuando la PWA corre instalada en el teléfono. */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
