@@ -92,9 +92,15 @@ export function LoginForm({
         <Field label="Correo">
           <Input name="email" type="email" autoComplete="email" required />
         </Field>
-        <Field label="Contraseña">
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="block text-sm font-medium text-foreground">Contraseña</label>
+            <Link href="/forgot-password" className="text-xs text-muted-foreground underline underline-offset-4">
+              ¿Olvidaste tu contraseña?
+            </Link>
+          </div>
           <Input name="password" type="password" autoComplete="current-password" required />
-        </Field>
+        </div>
 
         <FormMessage state={state} />
 

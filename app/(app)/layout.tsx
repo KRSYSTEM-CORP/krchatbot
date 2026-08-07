@@ -10,6 +10,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         orgName={session.orgName}
         userName={session.userName}
         isAdmin={session.role === "ADMIN"}
+        isSuperAdmin={session.isSuperAdmin}
       />
       {/* El padding inferior deja libre la barra de navegación del teléfono;
           en escritorio no existe y por eso se anula. */}

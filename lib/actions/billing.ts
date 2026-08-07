@@ -2,66 +2,90 @@
 
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin, getSession } from "@/lib/session";
-import { createCheckoutUrl, createPortalSessionUrl, chargebeeConfigured } from "@/lib/billing/chargebee";
-import { fail, type FormState } from "@/lib/validations";
+import { getSession } from "@/lib/session";
+import { PLATFORM_SETTINGS_ID, isOrgBlocked } from "@/lib/billing";
+import { paymentReportSchema, fail, firstIssue, type FormState } from "@/lib/validations";
 
-export type PlanKey = "basic" | "premium" | "pro";
-
-const PLAN_ENV: Record<PlanKey, string | undefined> = {
-  basic: process.env.CHARGEBEE_PLAN_BASIC,
-  premium: process.env.CHARGEBEE_PLAN_PREMIUM,
-  pro: process.env.CHARGEBEE_PLAN_PRO,
+export type BillingInfo = {
+  orgName: string;
+  isExempt: boolean;
+  monthlyFeeUsdCents: number | null;
+  nextPaymentDueDate: Date | null;
+  blocked: boolean;
+  paymentInstructions: string | null;
+  binanceQrDataUrl: string | null;
+  binanceId: string | null;
+  billingExchangeRate: number | null;
+  isAdmin: boolean;
 };
 
-function appUrl(): string {
-  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-}
-
-// Sin campos que juntar de un <form>, no hay razón para forzar estas dos en
-// el molde (prevState, formData) de useActionState — se llaman directas
-// desde un botón con startTransition, igual que assignChat o toggleRule.
-// Sólo un ADMIN decide de qué plan sale el dinero.
-export async function startCheckout(plan: PlanKey): Promise<FormState> {
-  const session = await requireAdmin();
-
-  if (!chargebeeConfigured()) return fail("La facturación todavía no está configurada.");
-  const planId = PLAN_ENV[plan];
-  if (!planId) return fail(`Falta configurar el plan "${plan}" en el servidor.`);
-
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
-
-  let url: string;
-  try {
-    url = await createCheckoutUrl({
-      orgId: session.orgId,
-      planId,
-      email: user.email,
-      name: user.name,
-      successUrl: `${appUrl()}/facturacion?estado=exito`,
-      cancelUrl: `${appUrl()}/facturacion?estado=cancelado`,
-    });
-  } catch (error) {
-    return fail(error instanceof Error ? error.message : "Chargebee no respondió");
-  }
-
-  redirect(url);
-}
-
-export async function openBillingPortal(): Promise<FormState> {
+// Se lee con getSession(), no requireSession(): esta página tiene que poder
+// mostrarse a una org bloqueada (es a donde requireSession() la manda), así
+// que no puede depender de la misma función que la bloquearía.
+export async function getBillingInfo(): Promise<BillingInfo> {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!chargebeeConfigured()) return fail("La facturación todavía no está configurada.");
-  if (!session.chargebeeCustomerId) {
-    return fail("Todavía no tienes una suscripción activa — elige un plan primero.");
-  }
 
-  let url: string;
-  try {
-    url = await createPortalSessionUrl(session.chargebeeCustomerId, `${appUrl()}/facturacion`);
-  } catch (error) {
-    return fail(error instanceof Error ? error.message : "Chargebee no respondió");
-  }
+  const [org, settings] = await Promise.all([
+    prisma.org.findUniqueOrThrow({
+      where: { id: session.orgId },
+      select: { isExempt: true, monthlyFeeUsdCents: true, nextPaymentDueDate: true },
+    }),
+    prisma.platformSettings.findUnique({ where: { id: PLATFORM_SETTINGS_ID } }),
+  ]);
 
-  redirect(url);
+  return {
+    orgName: session.orgName,
+    isExempt: org.isExempt,
+    monthlyFeeUsdCents: org.monthlyFeeUsdCents,
+    nextPaymentDueDate: org.nextPaymentDueDate,
+    blocked: isOrgBlocked(org),
+    paymentInstructions: settings?.paymentInstructions ?? null,
+    binanceQrDataUrl: settings?.binanceQrDataUrl ?? null,
+    binanceId: settings?.binanceId ?? null,
+    billingExchangeRate: settings?.billingExchangeRate != null ? Number(settings.billingExchangeRate) : null,
+    isAdmin: session.role === "ADMIN",
+  };
+}
+
+export async function listMyPaymentReports() {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  return prisma.paymentReport.findMany({
+    where: { orgId: session.orgId },
+    orderBy: { createdAt: "desc" },
+    include: { lines: true },
+  });
+}
+
+// El reclamo de un ADMIN de haber pagado el mantenimiento por fuera de la
+// app, con comprobante obligatorio. Queda PENDING hasta que un super admin
+// lo revise desde /admin — esto solo NUNCA cambia el estado de cobro por sí
+// mismo (ver approvePaymentReport en lib/actions/admin.ts). Es la única vía
+// de reportar un pago del lado de la org — no hay checkout automático.
+export async function submitPaymentReport(input: unknown): Promise<FormState> {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  if (session.role !== "ADMIN") return fail("Sólo un administrador puede reportar pagos.");
+
+  const parsed = paymentReportSchema.safeParse(input);
+  if (!parsed.success) return fail(firstIssue(parsed.error));
+
+  await prisma.paymentReport.create({
+    data: {
+      orgId: session.orgId,
+      reportedById: session.userId,
+      proofImageDataUrl: parsed.data.proofImageDataUrl,
+      note: parsed.data.note,
+      lines: {
+        create: parsed.data.lines.map((line) => ({
+          paymentMethod: line.paymentMethod,
+          amountUsdCents: line.amount,
+          reference: line.reference,
+        })),
+      },
+    },
+  });
+
+  return { ok: true, message: "Reporte enviado. El super admin lo revisará pronto." };
 }

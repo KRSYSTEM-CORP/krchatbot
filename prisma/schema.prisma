@@ -24,18 +24,6 @@ enum UserStatus {
   SUSPENDED
 }
 
-// TRIALING: dentro del período de prueba, acceso completo sin tarjeta.
-// ACTIVE: suscripción al día. PAST_DUE: el cobro falló, hay un margen de
-// gracia antes de bloquear (ver isBillingBlocked en lib/session.ts).
-// CANCELLED: bloqueada. Toda org nueva nace en TRIALING — nunca se bloquea
-// a nadie por un campo que no existía cuando se creó su cuenta.
-enum BillingStatus {
-  TRIALING
-  ACTIVE
-  PAST_DUE
-  CANCELLED
-}
-
 model Org {
   id        String   @id @default(cuid())
   name      String
@@ -45,19 +33,14 @@ model Org {
   maskNumbers Boolean @default(false)
   timezone  String   @default("America/Caracas")
 
-  // Facturación (Chargebee). El plan y el precio viven en Chargebee, no aquí
-  // — esta tabla sólo cachea el estado para no consultar su API en cada
-  // request. planId es el "item price id" de Chargebee, no un id propio.
-  chargebeeCustomerId     String?   @unique
-  chargebeeSubscriptionId String?   @unique
-  planId                  String?
-  billingStatus           BillingStatus @default(TRIALING)
-  trialEndsAt             DateTime?
-  // Cuándo empezó el estado PAST_DUE actual — null en cualquier otro estado.
-  // Es lo que sostiene el período de gracia: unos días de acceso normal tras
-  // un cobro fallido, para que un problema pasajero con la tarjeta no corte
-  // el servicio en el acto.
-  pastDueSince            DateTime?
+  // Facturación de mantenimiento, gestionada a mano por un super admin de KR
+  // System desde /admin — mismo modelo que KYRA CITAS y APP NEW (ver
+  // lib/billing.ts): sin pasarela de pago, el dueño reporta su comprobante y
+  // un super admin lo aprueba. isExempt la saca de todo cobro; sin
+  // nextPaymentDueDate (org recién creada) nunca bloquea.
+  isExempt           Boolean   @default(false)
+  monthlyFeeUsdCents Int?
+  nextPaymentDueDate DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -81,6 +64,8 @@ model Org {
   trainingRuns   TrainingRun[]
   webhooks       Webhook[]
   auditLogs      AuditLog[]
+  payments       Payment[]
+  paymentReports PaymentReport[]
 }
 
 model User {
@@ -98,6 +83,11 @@ model User {
   avatarUrl    String?
   role         Role       @default(MEMBER)
   status       UserStatus @default(ACTIVE)
+  // Administrador de la plataforma (KR System), no de una org — puede
+  // aprobar/rechazar reportes de pago y gestionar cualquier org desde
+  // /admin. No se puede activar desde la app; sólo directo en la base de
+  // datos (ver seed).
+  isSuperAdmin Boolean    @default(false)
   // El agente marca "disponible" para recibir asignaciones automáticas.
   isAvailable  Boolean    @default(true)
   lastSeenAt   DateTime?
@@ -113,9 +103,124 @@ model User {
   createdTasks    Task[]     @relation("TaskCreator")
   notes           PrivateNote[]
   auditLogs       AuditLog[]
+  passwordResetTokens PasswordResetToken[]
 
   @@unique([orgId, email])
   @@index([orgId])
+}
+
+// Tokens de un solo uso y corta duración para "olvidé mi contraseña". Sólo
+// se guarda el hash sha256 del token — igual que una contraseña, el valor
+// crudo sólo existe en el enlace que se manda por correo y en el navegador
+// de quien lo pide, así que una fuga de la base sola no sirve para resetear
+// nada.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Facturación de mantenimiento (manual, sin pasarela — ver lib/billing.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PaymentMethod {
+  TRANSFER
+  PAGO_MOVIL
+  ZELLE
+  BINANCE
+  OTHER
+}
+
+enum PaymentReportStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Un pago de mantenimiento ya confirmado — el registro que empuja
+// nextPaymentDueDate. Siempre lo crea un super admin (a mano, o al aprobar
+// un PaymentReport).
+model Payment {
+  id             String   @id @default(cuid())
+  orgId          String
+  org            Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  amountUsdCents Int
+  // Tasa Bs/USD de la plataforma vigente al momento del pago — sólo para
+  // mostrar el equivalente en bolívares, nunca para calcular el monto en sí
+  // (todo se cobra en USD).
+  exchangeRate   Decimal  @db.Decimal(12, 4)
+  periodEnd      DateTime
+  note           String?
+  verifiedById   String
+  createdAt      DateTime @default(now())
+
+  @@index([orgId, createdAt])
+}
+
+// El reclamo de un ADMIN de haber pagado el mantenimiento por fuera de la
+// app (transferencia, Pago Móvil, Zelle, Binance). Queda PENDING hasta que
+// un super admin lo revisa desde /admin — aprobarlo crea el Payment y
+// adelanta Org.nextPaymentDueDate; rechazarlo no cambia nada del estado de
+// cobro.
+model PaymentReport {
+  id                String              @id @default(cuid())
+  orgId             String
+  org               Org                 @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  reportedById      String
+  // Comprobante de pago (imagen en base64), mismo patrón de almacenamiento
+  // que otros campos de imagen de este proyecto.
+  proofImageDataUrl String?             @db.Text
+  note              String?
+  status            PaymentReportStatus @default(PENDING)
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime            @default(now())
+  lines             PaymentReportLine[]
+
+  @@index([orgId, status])
+  @@index([status, createdAt])
+}
+
+// Una línea de método de pago dentro de un reporte (ej. parte transferencia,
+// parte Pago Móvil).
+model PaymentReportLine {
+  id              String        @id @default(cuid())
+  paymentReportId String
+  paymentReport   PaymentReport @relation(fields: [paymentReportId], references: [id], onDelete: Cascade)
+  paymentMethod   PaymentMethod
+  amountUsdCents  Int
+  reference       String?
+
+  @@index([paymentReportId])
+}
+
+// Fila única de configuración global de la plataforma (no por org),
+// gestionada por el super admin desde /admin.
+model PlatformSettings {
+  id                        String   @id
+  // Extra free-text notes shown under the Binance details below — the QR/ID
+  // pair are the actual payment instructions now, this is just supplementary.
+  paymentInstructions       String?  @db.Text
+  // Binance Pay QR code, shown on /facturacion so an org can scan it to pay
+  // the subscription — same base64 data-URL pattern used elsewhere for
+  // uploaded images, saved via PlatformSettingsForm (resizeImageToDataUrl).
+  binanceQrDataUrl          String?  @db.Text
+  // Binance Pay ID / UID, shown alongside the QR as a manual fallback for
+  // whoever can't scan it.
+  binanceId                 String?
+  billingExchangeRate       Decimal? @db.Decimal(12, 4)
+  // Se aplica automáticamente al monthlyFeeUsdCents de toda org nueva (ver
+  // createOrgWithOwner en lib/org-provisioning.ts).
+  defaultMonthlyFeeUsdCents Int?
+  updatedAt                 DateTime @updatedAt
 }
 
 // Etiqueta: organiza chats/contactos/tickets Y define el acceso de los MEMBER.

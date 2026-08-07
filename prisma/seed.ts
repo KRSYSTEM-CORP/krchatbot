@@ -16,9 +16,33 @@ function hash(plain: string): string {
 }
 
 async function main() {
+  // Va primero y siempre corre, incluso si la org demo ya existe — es la
+  // única forma de conseguir un isSuperAdmin=true sin editar la base a mano.
+  const platformOrg = await prisma.org.upsert({
+    where: { slug: "kr-system" },
+    update: {},
+    create: { name: "KR System", slug: "kr-system", isExempt: true },
+  });
+
+  await prisma.user.upsert({
+    where: { orgId_email: { orgId: platformOrg.id, email: "admin@krsystem-corp.com" } },
+    update: { isSuperAdmin: true },
+    create: {
+      orgId: platformOrg.id,
+      email: "admin@krsystem-corp.com",
+      name: "KR System",
+      passwordHash: hash("cambia-esta-clave"),
+      role: "ADMIN",
+      isSuperAdmin: true,
+    },
+  });
+  console.log(
+    "Super admin: admin@krsystem-corp.com / cambia-esta-clave — cámbiala antes de desplegar a producción.",
+  );
+
   const existing = await prisma.org.findUnique({ where: { slug: "demo" } });
   if (existing) {
-    console.log("La organización demo ya existe; no se hace nada.");
+    console.log("La organización demo ya existe; no se hace nada más.");
     return;
   }
 

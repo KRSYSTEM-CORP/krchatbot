@@ -2,7 +2,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import type { BillingStatus, Role } from "@prisma/client";
+import type { Role } from "@prisma/client";
+import { isOrgBlocked } from "@/lib/billing";
 import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
@@ -28,35 +29,6 @@ export async function clearSessionCookie() {
   store.delete(SESSION_COOKIE_NAME);
 }
 
-// Días de gracia tras un cobro fallido antes de cortar el acceso — un
-// problema pasajero con la tarjeta (fondos, vencimiento) no debe tirar a un
-// negocio fuera de su propia bandeja en el acto.
-const PAST_DUE_GRACE_DAYS = 7;
-
-export function isBillingBlocked(org: {
-  billingStatus: BillingStatus;
-  trialEndsAt: Date | null;
-  pastDueSince: Date | null;
-}): boolean {
-  if (org.billingStatus === "ACTIVE") return false;
-
-  if (org.billingStatus === "TRIALING") {
-    // Sin trialEndsAt todavía no pasó por el checkout de Chargebee — no se
-    // bloquea a nadie por un paso que ni siquiera le hemos pedido cumplir.
-    if (!org.trialEndsAt) return false;
-    return org.trialEndsAt.getTime() < Date.now();
-  }
-
-  if (org.billingStatus === "PAST_DUE") {
-    if (!org.pastDueSince) return false;
-    const graceEndsAt = org.pastDueSince.getTime() + PAST_DUE_GRACE_DAYS * 86400000;
-    return Date.now() > graceEndsAt;
-  }
-
-  // CANCELLED
-  return true;
-}
-
 export type Session = {
   userId: string;
   userName: string;
@@ -67,9 +39,8 @@ export type Session = {
   // Ids de etiqueta que delimitan lo que este usuario puede ver. Null para
   // ADMIN, que ve la organización entera.
   labelIds: string[] | null;
-  billingStatus: BillingStatus;
   billingBlocked: boolean;
-  chargebeeCustomerId: string | null;
+  isSuperAdmin: boolean;
 };
 
 export async function getSession(): Promise<Session | null> {
@@ -90,10 +61,8 @@ export async function getSession(): Promise<Session | null> {
         select: {
           maskNumbers: true,
           name: true,
-          billingStatus: true,
-          trialEndsAt: true,
-          pastDueSince: true,
-          chargebeeCustomerId: true,
+          isExempt: true,
+          nextPaymentDueDate: true,
         },
       },
       labelAccess: { select: { labelId: true } },
@@ -111,9 +80,11 @@ export async function getSession(): Promise<Session | null> {
     // ADMIN necesita ver el número para auditar y para configurar envíos.
     maskNumbers: user.org.maskNumbers && user.role !== "ADMIN",
     labelIds: user.role === "ADMIN" ? null : user.labelAccess.map((l) => l.labelId),
-    billingStatus: user.org.billingStatus,
-    billingBlocked: isBillingBlocked(user.org),
-    chargebeeCustomerId: user.org.chargebeeCustomerId,
+    // Un super admin necesita poder entrar a cualquier org (incluida la
+    // suya propia, si tiene una) para gestionar facturación desde /admin sin
+    // quedar bloqueado él mismo.
+    billingBlocked: user.isSuperAdmin ? false : isOrgBlocked(user.org),
+    isSuperAdmin: user.isSuperAdmin,
   };
 }
 
@@ -130,6 +101,12 @@ export async function requireSession(): Promise<Session> {
 export async function requireAdmin(): Promise<Session> {
   const session = await requireSession();
   if (session.role !== "ADMIN") redirect("/inbox");
+  return session;
+}
+
+export async function requireSuperAdmin(): Promise<Session> {
+  const session = await requireSession();
+  if (!session.isSuperAdmin) redirect("/");
   return session;
 }
 

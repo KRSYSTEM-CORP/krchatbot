@@ -1,3 +1,21 @@
+import type { PaymentMethod } from "@prisma/client";
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  TRANSFER: "Transferencia",
+  PAGO_MOVIL: "Pago Móvil",
+  ZELLE: "Zelle",
+  BINANCE: "Binance",
+  OTHER: "Otro",
+};
+
+export function formatMoney(cents: number, currencyCode = "USD"): string {
+  try {
+    return new Intl.NumberFormat("es-VE", { style: "currency", currency: currencyCode }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currencyCode}`;
+  }
+}
+
 const DATE_FMT = new Intl.DateTimeFormat("es-VE", {
   day: "2-digit",
   month: "short",

@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron",
-      "schedule": "* * * * *"
+      "path": "/api/cron/bcv-rate",
+      "schedule": "0 4 * * *"
     }
   ]
 }

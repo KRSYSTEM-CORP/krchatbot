@@ -1,11 +1,21 @@
 "use server";
 
+import { randomBytes, createHash } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { setSessionCookie, clearSessionCookie } from "@/lib/session";
 import { createOrgWithOwner } from "@/lib/org-provisioning";
-import { signupSchema, loginSchema, fail, firstIssue, type FormState } from "@/lib/validations";
+import { sendPasswordResetEmail } from "@/lib/email";
+import {
+  signupSchema,
+  loginSchema,
+  requestPasswordResetSchema,
+  resetPasswordSchema,
+  fail,
+  firstIssue,
+  type FormState,
+} from "@/lib/validations";
 
 export async function signup(_prev: FormState, formData: FormData): Promise<FormState> {
   const parsed = signupSchema.safeParse(Object.fromEntries(formData));
@@ -58,4 +68,55 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
 export async function logout() {
   await clearSessionCookie();
   redirect("/login");
+}
+
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+function hashResetToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+// Siempre responde "listo" sin importar si el correo existe, para que este
+// formulario no sirva para averiguar qué correos tienen cuenta.
+export async function requestPasswordReset(_prev: FormState, formData: FormData): Promise<FormState> {
+  const parsed = requestPasswordResetSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return fail(firstIssue(parsed.error));
+
+  const user = await prisma.user.findFirst({ where: { email: parsed.data.email } });
+  if (user) {
+    const rawToken = randomBytes(32).toString("hex");
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashResetToken(rawToken),
+        expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+      },
+    });
+    await sendPasswordResetEmail(parsed.data.email, rawToken);
+  }
+
+  return { ok: true, message: "Si ese correo tiene una cuenta, te enviamos un enlace para recuperarla." };
+}
+
+export async function resetPassword(token: string, _prev: FormState, formData: FormData): Promise<FormState> {
+  const parsed = resetPasswordSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return fail(firstIssue(parsed.error));
+
+  const genericError = "Este enlace no es válido o ya venció. Solicita uno nuevo.";
+  const resetToken = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash: hashResetToken(token) },
+  });
+  if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) {
+    return fail(genericError);
+  }
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: resetToken.userId },
+      data: { passwordHash: hashPassword(parsed.data.password) },
+    }),
+    prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } }),
+  ]);
+
+  return { ok: true, message: "Contraseña actualizada." };
 }

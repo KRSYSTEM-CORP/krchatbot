@@ -12,6 +12,20 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Escribe tu contraseña"),
 });
 
+export const requestPasswordResetSchema = z.object({
+  email: z.email("Correo inválido").toLowerCase(),
+});
+
+export const resetPasswordSchema = z
+  .object({
+    password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres"),
+    confirmPassword: z.string().min(1, "Confirma la nueva contraseña"),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Las contraseñas no coinciden",
+    path: ["confirmPassword"],
+  });
+
 export const phoneSchema = z.object({
   label: z.string().trim().min(2, "Ponle un nombre al número").max(40),
 });
@@ -144,6 +158,72 @@ export const ruleSchema = z.object({
   phoneIds: z.array(z.string()).default([]),
   conditions: z.string().default('{"op":"AND","items":[]}'),
   actions: z.string().default("[]"),
+});
+
+// ── Facturación de mantenimiento (manual — ver lib/billing.ts) ─────────────
+
+export const paymentMethodSchema = z.enum(["TRANSFER", "PAGO_MOVIL", "ZELLE", "BINANCE", "OTHER"]);
+
+export const PAYMENT_METHODS_REQUIRING_REFERENCE = ["TRANSFER", "PAGO_MOVIL", "BINANCE"] as const;
+
+const toCents = (v: number) => Math.round(v * 100);
+const blankToUndefined = (v: unknown) => (v === "" || v == null ? undefined : v);
+
+const paymentReportLineSchema = z.object({
+  paymentMethod: paymentMethodSchema,
+  amount: z.coerce.number().positive("El monto debe ser mayor a 0").transform(toCents),
+  reference: z.preprocess(blankToUndefined, z.string().trim().optional()),
+});
+
+export const paymentReportSchema = z
+  .object({
+    lines: z.array(paymentReportLineSchema),
+    proofImageDataUrl: z
+      .string()
+      .trim()
+      .min(1, "El comprobante de pago es obligatorio")
+      .refine((v) => v.startsWith("data:image/"), "Comprobante inválido")
+      .refine((v) => v.length < 3_000_000, "El comprobante es demasiado grande"),
+    note: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  })
+  .superRefine((data, ctx) => {
+    if (data.lines.length === 0) {
+      ctx.addIssue({ code: "custom", path: ["lines"], message: "Agrega al menos un método de pago" });
+      return;
+    }
+    data.lines.forEach((line, i) => {
+      if (
+        (PAYMENT_METHODS_REQUIRING_REFERENCE as readonly string[]).includes(line.paymentMethod) &&
+        !line.reference
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["lines", i, "reference"],
+          message: "El número de referencia es obligatorio para este método de pago",
+        });
+      }
+    });
+  });
+
+export const maintenancePaymentSchema = z.object({
+  amount: z.coerce.number().positive("El monto debe ser mayor a 0").transform(toCents),
+  periodEnd: z.coerce.date(),
+  note: z.preprocess(blankToUndefined, z.string().trim().optional()),
+});
+
+export const rejectPaymentReportSchema = z.object({
+  reviewNote: z.preprocess(blankToUndefined, z.string().trim().optional()),
+});
+
+export const platformSettingsSchema = z.object({
+  paymentInstructions: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  binanceQrDataUrl: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  binanceId: z.preprocess(blankToUndefined, z.string().trim().optional()),
+  billingExchangeRate: z.coerce.number().positive("La tasa debe ser mayor a 0").optional(),
+  defaultMonthlyFee: z.preprocess(
+    blankToUndefined,
+    z.coerce.number().positive("El monto debe ser mayor a 0").transform(toCents).optional(),
+  ),
 });
 
 export type FormState = { ok: boolean; error?: string; message?: string };

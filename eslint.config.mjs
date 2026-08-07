@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Worker aparte (runtime y tipos de Cloudflare, no de Next) — ver
+    // cron-worker/README.
+    "cron-worker/**",
   ]),
 ]);
 

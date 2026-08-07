@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "krchatbot-cron",
+  "main": "index.ts",
+  "compatibility_date": "2026-08-01",
+  "triggers": {
+    // Le pega a /api/cron de KR ChatBot (desplegado en Vercel) cada minuto —
+    // el plan gratis de Vercel solo permite cron diario, el de Cloudflare sí
+    // permite cada minuto. Este Worker no aloja nada de la app, solo dispara
+    // el aviso.
+    "crons": ["* * * * *"]
+  }
+}

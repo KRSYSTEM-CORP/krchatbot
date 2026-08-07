@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { PLATFORM_SETTINGS_ID, TRIAL_DAYS, FALLBACK_MONTHLY_FEE_USD_CENTS } from "@/lib/billing";
 
 // Alta de una organización nueva con su primer usuario (ADMIN). La usan tanto
 // el signup manual (lib/actions/auth.ts) como el callback de Google
@@ -40,10 +41,20 @@ export type NewOwner = {
 export async function createOrgWithOwner(orgName: string, owner: NewOwner) {
   const slug = await uniqueSlugFor(orgName);
 
+  // El alta es "completamente automatizada" por diseño (con Google o con
+  // correo/clave) — a diferencia de KYRA CITAS/APP NEW, aquí no hay un super
+  // admin aprobando cada alta, así que el trial arranca de una vez, aquí
+  // mismo, no en un paso de aprobación aparte.
+  const settings = await prisma.platformSettings.findUnique({ where: { id: PLATFORM_SETTINGS_ID } });
+  const trialEndsAt = new Date();
+  trialEndsAt.setDate(trialEndsAt.getDate() + TRIAL_DAYS);
+
   return prisma.org.create({
     data: {
       name: orgName,
       slug,
+      monthlyFeeUsdCents: settings?.defaultMonthlyFeeUsdCents ?? FALLBACK_MONTHLY_FEE_USD_CENTS,
+      nextPaymentDueDate: trialEndsAt,
       // El agente nace apagado y en modo pasivo. Encenderlo es una decisión
       // explícita que se toma después de cargar la base de conocimiento.
       agentSettings: {
