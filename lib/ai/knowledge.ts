@@ -141,3 +141,42 @@ export async function markKnowledgeUsed(ids: string[]) {
     data: { usageCount: { increment: 1 } },
   });
 }
+
+// ── Importar desde PDF ──────────────────────────────────────────────────────
+
+// Un PDF crudo no llega troceado en preguntas y respuestas como una FAQ — se
+// parte en fragmentos de tamaño manejable para el modelo (ver
+// SEND_ALL_THRESHOLD arriba) y cada uno se guarda como su propia entrada.
+// Nunca corta a la mitad de una oración si puede evitarlo: busca el último
+// salto de párrafo, punto seguido, o salto de línea dentro del último 50% del
+// fragmento y corta ahí en vez de en el límite exacto de caracteres.
+const CHUNK_MAX_CHARS = 1800;
+// Frena un PDF absurdamente largo antes de que genere miles de filas —
+// ~150 páginas de texto denso, de sobra para un manual de producto real.
+const CHUNK_MAX_COUNT = 200;
+
+export function chunkText(rawText: string, maxChars = CHUNK_MAX_CHARS): string[] {
+  const text = rawText.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
+  if (!text) return [];
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length && chunks.length < CHUNK_MAX_COUNT) {
+    let end = Math.min(start + maxChars, text.length);
+    if (end < text.length) {
+      const window = text.slice(start, end);
+      const breakPoint = Math.max(
+        window.lastIndexOf("\n\n"),
+        window.lastIndexOf(". "),
+        window.lastIndexOf("\n"),
+      );
+      if (breakPoint > maxChars * 0.5) {
+        end = start + breakPoint + 1;
+      }
+    }
+    const chunk = text.slice(start, end).trim();
+    if (chunk) chunks.push(chunk);
+    start = end;
+  }
+  return chunks;
+}

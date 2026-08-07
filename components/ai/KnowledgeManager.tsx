@@ -13,6 +13,7 @@ import {
   setKnowledgeStatus,
   deleteKnowledgeItems,
   bulkImportFaqs,
+  importKnowledgeFromPdf,
 } from "@/lib/actions/ai";
 import type { FormState } from "@/lib/validations";
 
@@ -51,6 +52,7 @@ export function KnowledgeManager({ items }: { items: Item[] }) {
 
   const [saveState, saveAction, saving] = useActionState(saveKnowledgeItem, initial);
   const [importState, importAction, importing] = useActionState(bulkImportFaqs, initial);
+  const [pdfState, pdfAction, importingPdf] = useActionState(importKnowledgeFromPdf, initial);
 
   const visible = useMemo(() => {
     if (tab === "ALL") return items;
@@ -136,6 +138,29 @@ export function KnowledgeManager({ items }: { items: Item[] }) {
               <FormMessage state={importState} />
             </div>
           </form>
+
+          <div className="border-t border-border pt-3">
+            <form action={pdfAction} className="space-y-3">
+              <Field
+                label="O subir un PDF"
+                hint="Manual, catálogo, lista de precios, etc. Se parte en fragmentos que entran como 'Por revisar' — revísalos y actívalos desde esa pestaña."
+              >
+                <input
+                  type="file"
+                  name="pdf"
+                  accept="application/pdf"
+                  required
+                  className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground"
+                />
+              </Field>
+              <div className="flex items-center gap-3">
+                <Button type="submit" size="sm" disabled={importingPdf}>
+                  {importingPdf ? "Leyendo PDF…" : "Importar PDF"}
+                </Button>
+                <FormMessage state={pdfState} />
+              </div>
+            </form>
+          </div>
         </Card>
       ) : null}
 

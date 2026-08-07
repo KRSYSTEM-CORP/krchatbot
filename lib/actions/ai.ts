@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
 import { runSelfTraining } from "@/lib/ai/training";
+import { chunkText } from "@/lib/ai/knowledge";
 import {
   agentSettingsSchema,
   personalizationSchema,
@@ -145,6 +146,58 @@ export async function bulkImportFaqs(_prev: FormState, formData: FormData): Prom
 
   revalidatePath("/ia/conocimiento");
   return { ok: true, message: `${items.length} entradas importadas` };
+}
+
+const MAX_PDF_BYTES = 10 * 1024 * 1024; // 10 MB — de sobra para un manual/catálogo real.
+
+// Sube un PDF, extrae su texto y lo parte en fragmentos (ver chunkText en
+// lib/ai/knowledge.ts) — cada uno se guarda como su propia entrada, source
+// DOCUMENT. A diferencia de una FAQ escrita a mano, texto extraído de un PDF
+// nunca se sabe si salió limpio (columnas, tablas, encabezados repetidos), así
+// que entra como NEEDS_REVIEW en vez de ACTIVE — el admin las revisa y activa
+// en bloque desde la pestaña "Por revisar", igual que lo auto-aprendido.
+export async function importKnowledgeFromPdf(_prev: FormState, formData: FormData): Promise<FormState> {
+  const session = await requireAdmin();
+
+  const file = formData.get("pdf");
+  if (!(file instanceof File) || file.size === 0) return fail("Selecciona un archivo PDF");
+  if (file.type !== "application/pdf") return fail("El archivo debe ser un PDF");
+  if (file.size > MAX_PDF_BYTES) return fail("El PDF no puede pesar más de 10 MB");
+
+  let text: string;
+  try {
+    const { extractText, getDocumentProxy } = await import("unpdf");
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    const pdf = await getDocumentProxy(buffer);
+    const result = await extractText(pdf, { mergePages: true });
+    text = result.text;
+  } catch {
+    return fail("No se pudo leer el PDF — puede estar dañado o protegido con contraseña");
+  }
+
+  const chunks = chunkText(text);
+  if (chunks.length === 0) {
+    return fail("No se encontró texto en el PDF (¿es un PDF escaneado, sin texto real?)");
+  }
+
+  const documentName = file.name;
+  await prisma.knowledgeItem.createMany({
+    data: chunks.map((chunk, index) => ({
+      orgId: session.orgId,
+      source: "DOCUMENT" as const,
+      status: "NEEDS_REVIEW" as const,
+      question: `${documentName} — fragmento ${index + 1}/${chunks.length}`,
+      answer: chunk,
+      documentName,
+      chunkIndex: index,
+    })),
+  });
+
+  revalidatePath("/ia/conocimiento");
+  return {
+    ok: true,
+    message: `${chunks.length} fragmento(s) importados desde "${documentName}" — quedaron por revisar antes de activarse`,
+  };
 }
 
 // ── Herramientas a medida ───────────────────────────────────────────────────
