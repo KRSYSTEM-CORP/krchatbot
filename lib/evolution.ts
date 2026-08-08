@@ -52,16 +52,25 @@ export type InstanceState = "open" | "connecting" | "close";
 // Los eventos que necesitamos escuchar. Pedir menos de los que se usan hace
 // que el sistema pierda mensajes en silencio; pedir todos llena el log de
 // ruido que después hay que filtrar en cada request.
+//
+// *_SET (MESSAGES_SET/CONTACTS_SET/CHATS_SET) son de "alto volumen" — Evolution
+// los desaconseja en producción salvo que se necesite el historial, que es
+// justo lo que hace falta aquí: son los que traen la sincronización de chats
+// viejos al conectar por QR (equivalente al historial que trae WhatsApp Web).
+// Sólo disparan una vez, justo después de escanear — no en operación normal.
 const WEBHOOK_EVENTS = [
   "QRCODE_UPDATED",
   "CONNECTION_UPDATE",
   "MESSAGES_UPSERT",
   "MESSAGES_UPDATE",
   "MESSAGES_DELETE",
+  "MESSAGES_SET",
   "SEND_MESSAGE",
   "CONTACTS_UPSERT",
+  "CONTACTS_SET",
   "CHATS_UPSERT",
   "CHATS_UPDATE",
+  "CHATS_SET",
   "GROUPS_UPSERT",
   "GROUP_PARTICIPANTS_UPDATE",
 ];
@@ -208,6 +217,16 @@ export async function fetchProfilePicture(instanceName: string, jid: string) {
   return call<{ profilePictureUrl?: string }>(
     `/chat/fetchProfilePictureUrl/${instanceName}`,
     { method: "POST", body: { number: jid } },
+  );
+}
+
+// Respaldo para cuando el webhook no trae el media inline (base64:true en el
+// webhook no siempre alcanza — ver createInstance): se pide el archivo aparte
+// por el id del mensaje.
+export async function fetchMediaBase64(instanceName: string, messageId: string) {
+  return call<{ base64?: string; mimetype?: string }>(
+    `/chat/getBase64FromMediaMessage/${instanceName}`,
+    { method: "POST", body: { message: { key: { id: messageId } } } },
   );
 }
 

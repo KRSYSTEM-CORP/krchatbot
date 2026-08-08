@@ -7,7 +7,10 @@ import {
   ArrowLeft,
   Check,
   CheckCheck,
+  Copy,
   Flag,
+  GraduationCap,
+  MoreVertical,
   Send,
   Sparkles,
   StickyNote,
@@ -45,7 +48,9 @@ import {
   markChatRead,
   draftReply,
   polishText,
+  toggleMessageFlag,
 } from "@/lib/actions/inbox";
+import { trainFromMessage } from "@/lib/actions/ai";
 import type { FormState } from "@/lib/validations";
 
 type MessageItem = {
@@ -95,9 +100,15 @@ type ChatMeta = {
   aiFlagging: boolean;
   agentState: "INACTIVE" | "ACTIVE" | "THINKING" | "SNOOZED";
   snoozedUntil: string | null;
+  imageUrl: string | null;
 };
 
 const initial: FormState = { ok: true };
+
+// Mismo mecanismo que en ChatList (ver ese archivo) pero más seguido: es el
+// chat que la persona está mirando en este momento, así que un mensaje nuevo
+// debe aparecer casi tan rápido como en WhatsApp Web.
+const CHAT_REFRESH_MS = 3000;
 
 const agentStateLabel = {
   INACTIVE: "IA en espera",
@@ -118,6 +129,7 @@ export function ChatView({
   aiGloballyOn,
   aiCanSend,
   tickets,
+  isAdmin,
 }: {
   chat: ChatMeta;
   timeline: TimelineItem[];
@@ -128,6 +140,7 @@ export function ChatView({
   aiGloballyOn: boolean;
   aiCanSend: boolean;
   tickets: { id: string; number: number; title: string; status: string; priority: string }[];
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"message" | "note">("message");
@@ -144,6 +157,8 @@ export function ChatView({
   const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [menuFor, setMenuFor] = useState<{ item: MessageItem; x: number; y: number } | null>(null);
+  const [improveFor, setImproveFor] = useState<{ question: string; answer: string } | null>(null);
 
   // Para la franja de "respondiendo a": encontrar el mensaje citado por id
   // sin volver a pedirlo al servidor — ya está en el mismo hilo cargado.
@@ -159,6 +174,13 @@ export function ChatView({
     bottomRef.current?.scrollIntoView({ block: "end" });
     void markChatRead(chat.id);
   }, [chat.id, timeline.length]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, CHAT_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [router]);
 
   useEffect(() => {
     if (sendState.ok && !sendState.error && composerRef.current) {
@@ -261,6 +283,35 @@ export function ChatView({
     });
   }
 
+  function toggleFlag(messageId: string) {
+    setMenuFor(null);
+    run(() => toggleMessageFlag(chat.id, messageId));
+  }
+
+  function openImprove(item: MessageItem) {
+    setMenuFor(null);
+    const index = timeline.findIndex((row) => row.id === item.id);
+    // Si el mensaje es de la IA, la pregunta es lo último que mandó el
+    // cliente antes; si el mensaje ES la pregunta del cliente, se parte de
+    // ahí directo y se deja la respuesta en blanco para escribirla.
+    const precedingInbound = [...timeline.slice(0, index)]
+      .reverse()
+      .find((row): row is MessageItem => row.kind === "message" && !row.fromMe);
+
+    setImproveFor({
+      question: item.fromMe ? (precedingInbound?.body ?? "") : item.body,
+      answer: item.fromMe ? item.body : "",
+    });
+  }
+
+  function saveImprovement(question: string, answer: string) {
+    startTransition(async () => {
+      const result = await trainFromMessage(question, answer);
+      setNotice(result);
+      if (result.ok) setImproveFor(null);
+    });
+  }
+
   return (
     <div className="flex h-dvh flex-col md:h-screen">
       {/* Cabecera */}
@@ -268,6 +319,15 @@ export function ChatView({
         <Link href="/inbox" className="md:hidden">
           <ArrowLeft className="h-5 w-5" />
         </Link>
+
+        {chat.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- URL de WhatsApp/R2, no un dominio configurado en next/image
+          <img src={chat.imageUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+        ) : (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+            {chat.name.slice(0, 2).toUpperCase()}
+          </div>
+        )}
 
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{chat.name}</p>
@@ -312,6 +372,7 @@ export function ChatView({
                       new Date(timeline[index - 1].at).toDateString()
                   }
                   onReact={(emoji) => react(item.id, emoji)}
+                  onMenu={(messageItem, x, y) => setMenuFor({ item: messageItem, x, y })}
                 />
               ))
             )}
@@ -660,6 +721,31 @@ export function ChatView({
       {showLocationPicker ? (
         <LocationPicker onCancel={() => setShowLocationPicker(false)} onSend={sendLocationPoint} />
       ) : null}
+
+      {menuFor ? (
+        <MessageMenu
+          x={menuFor.x}
+          y={menuFor.y}
+          item={menuFor.item}
+          isAdmin={isAdmin}
+          onClose={() => setMenuFor(null)}
+          onCopy={() => {
+            void navigator.clipboard.writeText(menuFor.item.body);
+            setMenuFor(null);
+          }}
+          onToggleFlag={() => toggleFlag(menuFor.item.id)}
+          onImprove={() => openImprove(menuFor.item)}
+        />
+      ) : null}
+
+      {improveFor ? (
+        <ImproveAnswerModal
+          question={improveFor.question}
+          answer={improveFor.answer}
+          onCancel={() => setImproveFor(null)}
+          onSave={saveImprovement}
+        />
+      ) : null}
     </div>
   );
 }
@@ -675,6 +761,12 @@ function MediaContent({ item }: { item: MessageItem }) {
         alt={item.body || "Imagen"}
         className="max-h-72 w-full rounded-lg object-cover"
       />
+    );
+  }
+  if (item.mediaKind === "STICKER" && item.mediaUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- URL propia (local o R2), no un dominio configurado en next/image
+      <img src={item.mediaUrl} alt="Sticker" className="h-32 w-32 object-contain" />
     );
   }
   if (item.mediaKind === "VIDEO" && item.mediaUrl) {
@@ -716,12 +808,14 @@ function TimelineRow({
   aiNickname,
   showDate,
   onReact,
+  onMenu,
 }: {
   item: TimelineItem;
   quoted?: MessageItem;
   aiNickname: string;
   showDate: boolean;
   onReact: (emoji: string) => void;
+  onMenu: (item: MessageItem, x: number, y: number) => void;
 }) {
   const at = new Date(item.at);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -750,7 +844,10 @@ function TimelineRow({
       ) : (
         <div className={cn("group flex items-end gap-1", item.fromMe ? "justify-end" : "justify-start")}>
           {!item.fromMe ? (
-            <ReactTrigger open={pickerOpen} setOpen={setPickerOpen} onReact={onReact} side="right" />
+            <>
+              <ReactTrigger open={pickerOpen} setOpen={setPickerOpen} onReact={onReact} side="right" />
+              <MenuTrigger item={item} onMenu={onMenu} />
+            </>
           ) : null}
 
           {/* La colita es un triángulo real (dos bordes transparentes, uno de
@@ -758,6 +855,10 @@ function TimelineRow({
               como WhatsApp en vez de aproximarlo sólo con border-radius. */}
           <div className="relative">
             <div
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onMenu(item, event.clientX, event.clientY);
+              }}
               className={cn(
                 "max-w-[min(80%,32rem)] rounded-lg px-3 py-2 shadow-sm",
                 item.fromMe ? "rounded-br-none bg-bubble-out" : "rounded-bl-none border border-border bg-bubble-in",
@@ -839,11 +940,36 @@ function TimelineRow({
           </div>
 
           {item.fromMe ? (
-            <ReactTrigger open={pickerOpen} setOpen={setPickerOpen} onReact={onReact} side="left" />
+            <>
+              <MenuTrigger item={item} onMenu={onMenu} />
+              <ReactTrigger open={pickerOpen} setOpen={setPickerOpen} onReact={onReact} side="left" />
+            </>
           ) : null}
         </div>
       )}
     </>
+  );
+}
+
+function MenuTrigger({
+  item,
+  onMenu,
+}: {
+  item: MessageItem;
+  onMenu: (item: MessageItem, x: number, y: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        onMenu(item, rect.left, rect.bottom + 4);
+      }}
+      className="mb-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+      title="Más opciones"
+    >
+      <MoreVertical className="h-3.5 w-3.5" />
+    </button>
   );
 }
 
@@ -907,6 +1033,148 @@ function ReactTrigger({
           </div>
         </>
       ) : null}
+    </div>
+  );
+}
+
+// Menú contextual al hacer clic derecho (o tocar "⋮") sobre un mensaje —
+// inspirado en el menú de mensaje de Periskope: copiar, marcar y, si es
+// admin, mandar la respuesta a entrenar la base de conocimiento.
+function MessageMenu({
+  x,
+  y,
+  item,
+  isAdmin,
+  onClose,
+  onCopy,
+  onToggleFlag,
+  onImprove,
+}: {
+  x: number;
+  y: number;
+  item: MessageItem;
+  isAdmin: boolean;
+  onClose: () => void;
+  onCopy: () => void;
+  onToggleFlag: () => void;
+  onImprove: () => void;
+}) {
+  // Se ajusta para no salirse por la derecha/abajo de la ventana — un menú
+  // que aparece medio cortado es peor que uno que se corrió un poco.
+  const menuWidth = 220;
+  const left = Math.min(x, window.innerWidth - menuWidth - 8);
+  const top = Math.min(y, window.innerHeight - 220);
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-hidden
+        tabIndex={-1}
+        className="fixed inset-0 z-30 cursor-default"
+        onClick={onClose}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onClose();
+        }}
+      />
+      <div
+        style={{ left, top }}
+        className="fixed z-40 w-[220px] overflow-hidden rounded-lg border border-border bg-card py-1 shadow-lg"
+      >
+        {item.body ? (
+          <button
+            type="button"
+            onClick={onCopy}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent"
+          >
+            <Copy className="h-4 w-4 text-muted-foreground" />
+            Copiar texto
+          </button>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onToggleFlag}
+          className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-accent"
+        >
+          <Flag className="h-4 w-4 text-muted-foreground" />
+          {item.isFlagged ? "Quitar de importantes" : "Marcar como importante"}
+        </button>
+
+        {isAdmin ? (
+          <button
+            type="button"
+            onClick={onImprove}
+            className="flex w-full items-center gap-2.5 border-t border-border px-3 py-2 text-left text-sm hover:bg-accent"
+          >
+            <GraduationCap className="h-4 w-4 text-primary" />
+            Mejorar respuesta con IA
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+// Panel para corregir lo que la IA debió responder — la corrección se guarda
+// tal cual en la base de conocimiento (source SELF_LEARNED, ya ACTIVA: la
+// escribió una persona a propósito, no hace falta revisarla después).
+function ImproveAnswerModal({
+  question,
+  answer,
+  onCancel,
+  onSave,
+}: {
+  question: string;
+  answer: string;
+  onCancel: () => void;
+  onSave: (question: string, answer: string) => void;
+}) {
+  const [q, setQ] = useState(question);
+  const [a, setA] = useState(answer);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md space-y-4 rounded-xl border border-border bg-card p-4 shadow-xl">
+        <div className="flex items-center gap-2">
+          <GraduationCap className="h-5 w-5 text-primary" />
+          <h3 className="font-medium">Mejorar respuesta con IA</h3>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Esto se guarda directo en la base de conocimiento (Conocimiento → Aprendidas) y la IA lo
+          usará la próxima vez que le pregunten algo parecido.
+        </p>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">Pregunta del cliente</label>
+          <textarea
+            value={q}
+            onChange={(event) => setQ(event.target.value)}
+            rows={2}
+            className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">Respuesta correcta</label>
+          <textarea
+            value={a}
+            onChange={(event) => setA(event.target.value)}
+            rows={4}
+            className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancelar
+          </Button>
+          <Button type="button" onClick={() => onSave(q, a)} disabled={!q.trim() || !a.trim()}>
+            Guardar
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

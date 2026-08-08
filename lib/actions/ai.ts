@@ -33,6 +33,8 @@ export async function saveAgentSettings(
     canCreateTickets: checkbox(formData, "canCreateTickets"),
     canCreatePrivateNotes: checkbox(formData, "canCreatePrivateNotes"),
     allowedPhoneIds: formData.getAll("allowedPhoneIds").map(String),
+    businessHoursEnabled: checkbox(formData, "businessHoursEnabled"),
+    businessHoursDays: formData.getAll("businessHoursDays").map(String),
   });
   if (!parsed.success) return fail(firstIssue(parsed.error));
 
@@ -198,6 +200,32 @@ export async function importKnowledgeFromPdf(_prev: FormState, formData: FormDat
     ok: true,
     message: `${chunks.length} fragmento(s) importados desde "${documentName}" — quedaron por revisar antes de activarse`,
   };
+}
+
+// "Mejorar respuesta": desde el menú de un mensaje en el inbox, un agente
+// corrige lo que la IA debió responder. A diferencia del auto-entrenamiento
+// semanal (que infiere y pide revisión), esto lo escribió una persona a
+// propósito — entra ACTIVA de una vez, sin pasar por NEEDS_REVIEW.
+export async function trainFromMessage(question: string, answer: string): Promise<FormState> {
+  const session = await requireAdmin();
+
+  const q = question.trim();
+  const a = answer.trim();
+  if (!q) return fail("Falta la pregunta del cliente");
+  if (!a) return fail("Escribe la respuesta correcta");
+
+  await prisma.knowledgeItem.create({
+    data: {
+      orgId: session.orgId,
+      source: "SELF_LEARNED",
+      status: "ACTIVE",
+      question: q,
+      answer: a,
+    },
+  });
+
+  revalidatePath("/ia/conocimiento");
+  return { ok: true, message: "Guardado en la base de conocimiento" };
 }
 
 // ── Herramientas a medida ───────────────────────────────────────────────────

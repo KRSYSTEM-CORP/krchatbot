@@ -53,11 +53,13 @@ export function Switch({
   hint,
   name,
   defaultChecked,
+  onChange,
 }: {
   label: string;
   hint?: string;
   name: string;
   defaultChecked?: boolean;
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
     <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40">
@@ -65,6 +67,7 @@ export function Switch({
         type="checkbox"
         name={name}
         defaultChecked={defaultChecked}
+        onChange={onChange}
         className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--primary)]"
       />
       <span className="space-y-0.5">

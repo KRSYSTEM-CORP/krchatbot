@@ -31,6 +31,11 @@ export default async function AiSettingsPage() {
         responseDelaySeconds: settings.responseDelaySeconds,
         snoozeMinutes: settings.snoozeMinutes,
         allowedPhoneIds: settings.allowedPhoneIds,
+        businessHoursEnabled: settings.businessHoursEnabled,
+        businessHoursStart: settings.businessHoursStart,
+        businessHoursEnd: settings.businessHoursEnd,
+        businessHoursDays: settings.businessHoursDays,
+        businessHoursAwayMessage: settings.businessHoursAwayMessage,
       }}
       phones={phones}
     />

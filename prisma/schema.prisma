@@ -673,6 +673,16 @@ model AgentSettings {
   selfTrainingEnabled  Boolean @default(false)
   selfTrainingRequiresReview Boolean @default(true)
 
+  // Horario de funcionamiento: fuera de estos días/horas (zona de Org.timezone)
+  // la IA no responde y, si hay mensaje configurado, se manda uno solo avisando
+  // que está fuera de horario en vez de dejar al cliente sin nada.
+  businessHoursEnabled Boolean @default(false)
+  businessHoursStart   String  @default("09:00")
+  businessHoursEnd     String  @default("18:00")
+  // 0 = domingo … 6 = sábado (igual que Date#getDay).
+  businessHoursDays    Int[]   @default([1, 2, 3, 4, 5])
+  businessHoursAwayMessage String @default("Gracias por tu mensaje. En este momento estamos fuera de nuestro horario de atención — te responderemos en cuanto abramos.")
+
   // Clave de IA propia de la organización, en vez de la clave global del
   // despliegue (ver lib/ai/client.ts). Null = usa la global. Se guarda
   // cifrada (ver lib/crypto.ts); es una organización trayendo su propia

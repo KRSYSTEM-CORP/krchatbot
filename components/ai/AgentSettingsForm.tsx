@@ -10,6 +10,10 @@ import type { FormState } from "@/lib/validations";
 
 const initial: FormState = { ok: true };
 
+// Índice 0 = domingo … 6 = sábado, igual que Date#getDay (y que
+// businessHoursDays en el schema).
+const DAY_LABELS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
 export function AgentSettingsForm({
   settings,
   phones,
@@ -24,11 +28,17 @@ export function AgentSettingsForm({
     responseDelaySeconds: number;
     snoozeMinutes: number;
     allowedPhoneIds: string[];
+    businessHoursEnabled: boolean;
+    businessHoursStart: string;
+    businessHoursEnd: string;
+    businessHoursDays: number[];
+    businessHoursAwayMessage: string;
   };
   phones: { id: string; label: string }[];
 }) {
   const [state, action, pending] = useActionState(saveAgentSettings, initial);
   const [canSend, setCanSend] = useState(settings.canSendMessages);
+  const [businessHoursOn, setBusinessHoursOn] = useState(settings.businessHoursEnabled);
 
   return (
     <form action={action} className="grid gap-4 lg:grid-cols-2">
@@ -150,6 +160,71 @@ export function AgentSettingsForm({
           label="Dejar notas internas"
           hint="Para avisar a la persona correcta sin que el cliente lo vea."
         />
+      </Card>
+
+      <Card className="space-y-4 lg:col-span-2">
+        <h2 className="font-medium">Horario de funcionamiento</h2>
+        <Switch
+          name="businessHoursEnabled"
+          defaultChecked={settings.businessHoursEnabled}
+          onChange={(event) => setBusinessHoursOn(event.target.checked)}
+          label="Restringir la IA a un horario"
+          hint="Fuera de estos días y horas, la IA no responde — sólo manda (una vez) el mensaje de fuera de horario, si hay uno."
+        />
+
+        {businessHoursOn ? (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Hora de apertura">
+                <Input
+                  name="businessHoursStart"
+                  type="time"
+                  defaultValue={settings.businessHoursStart}
+                  required
+                />
+              </Field>
+              <Field label="Hora de cierre">
+                <Input
+                  name="businessHoursEnd"
+                  type="time"
+                  defaultValue={settings.businessHoursEnd}
+                  required
+                />
+              </Field>
+            </div>
+
+            <Field label="Días">
+              <div className="flex flex-wrap gap-1.5">
+                {DAY_LABELS.map((label, index) => (
+                  <label
+                    key={index}
+                    className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      name="businessHoursDays"
+                      value={index}
+                      defaultChecked={settings.businessHoursDays.includes(index)}
+                      className="h-3.5 w-3.5 accent-[var(--primary)]"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </Field>
+
+            <Field
+              label="Mensaje fuera de horario (opcional)"
+              hint="Se manda una sola vez mientras dure el cierre, no en cada mensaje que llegue."
+            >
+              <Input
+                name="businessHoursAwayMessage"
+                defaultValue={settings.businessHoursAwayMessage}
+                maxLength={1000}
+              />
+            </Field>
+          </>
+        ) : null}
       </Card>
 
       <div className="flex items-center gap-3 lg:col-span-2">

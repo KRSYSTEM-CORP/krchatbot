@@ -30,7 +30,7 @@ type Item = {
 const initial: FormState = { ok: true };
 
 const sourceLabel = {
-  FAQ: "Manual",
+  FAQ: "FAQ",
   SELF_LEARNED: "Aprendida",
   DOCUMENT: "Documento",
 } as const;
@@ -76,7 +76,7 @@ export function KnowledgeManager({ items }: { items: Item[] }) {
         {(
           [
             ["ALL", `Todas · ${items.length}`],
-            ["FAQ", "Manuales"],
+            ["FAQ", "FAQ"],
             ["SELF_LEARNED", "Aprendidas"],
             ["NEEDS_REVIEW", `Por revisar · ${pendingReview}`],
           ] as const

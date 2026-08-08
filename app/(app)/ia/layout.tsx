@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/session";
-import { aiIsConfigured, aiProviderName } from "@/lib/ai/client";
+import { aiIsConfigured } from "@/lib/ai/client";
 
 const tabs = [
   { href: "/ia", label: "Ajustes" },
@@ -13,7 +13,6 @@ const tabs = [
 export default async function AiLayout({ children }: { children: React.ReactNode }) {
   await requireAdmin();
   const configured = aiIsConfigured();
-  const provider = aiProviderName();
 
   return (
     <div className="space-y-5 p-4 md:p-6">
@@ -27,15 +26,10 @@ export default async function AiLayout({ children }: { children: React.ReactNode
 
       {!configured ? (
         <p className="rounded-md bg-[color-mix(in_srgb,var(--warning)_14%,transparent)] px-3 py-2 text-sm text-[var(--warning)]">
-          Falta una clave de IA en el entorno: pon <code>ANTHROPIC_API_KEY</code> o{" "}
-          <code>GEMINI_API_KEY</code> (esta última es gratis, sin tarjeta). Puedes configurar todo,
-          pero la IA no responderá hasta que una de las dos esté puesta.
+          Falta configurar una clave de IA en el entorno. Puedes configurar todo, pero la IA no
+          responderá hasta que el despliegue tenga una puesta.
         </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Motor de IA activo: <strong>{provider === "anthropic" ? "Claude" : "Gemini"}</strong>
-        </p>
-      )}
+      ) : null}
 
       {/* Se usan enlaces normales en vez de un estado activo calculado en el
           cliente: son cinco pestañas y no vale la pena volver todo interactivo

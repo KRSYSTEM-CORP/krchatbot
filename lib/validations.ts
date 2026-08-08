@@ -85,6 +85,11 @@ export const agentSettingsSchema = z.object({
   responseDelaySeconds: z.coerce.number().int().min(0).max(600),
   snoozeMinutes: z.coerce.number().int().min(1).max(1440),
   allowedPhoneIds: z.array(z.string()).default([]),
+  businessHoursEnabled: z.boolean().default(false),
+  businessHoursStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato HH:MM"),
+  businessHoursEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato HH:MM"),
+  businessHoursDays: z.array(z.coerce.number().int().min(0).max(6)).default([]),
+  businessHoursAwayMessage: z.string().trim().max(1000).default(""),
 });
 
 export const personalizationSchema = z.object({

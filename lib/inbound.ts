@@ -4,7 +4,11 @@ import { isGroupJid, digitsOf } from "@/lib/jid";
 import { runRules } from "@/lib/automation/engine";
 import { shouldActivate, runAgent, flagMessage } from "@/lib/ai/agent";
 import { aiIsConfigured } from "@/lib/ai/client";
-import type { MessageKind } from "@prisma/client";
+import { isWithinBusinessHours } from "@/lib/ai/business-hours";
+import { enqueueMessage } from "@/lib/queue";
+import { getStorage, MAX_UPLOAD_BYTES } from "@/lib/storage";
+import * as evolution from "@/lib/evolution";
+import type { MessageKind, Prisma } from "@prisma/client";
 
 // Todo lo que WhatsApp le cuenta a Evolution entra por aquí. El orden importa:
 // primero se persiste (para no perder nada si algo falla después), luego
@@ -62,6 +66,74 @@ function kindOf(message: Record<string, unknown> | undefined): MessageKind {
   return "TEXT";
 }
 
+// El objeto Baileys de cada tipo de media trae su propio mimetype/nombre —
+// documentMessage es el único que suele traer un nombre de archivo real
+// (fileName o title); el resto se nombra por extensión al vuelo.
+const MEDIA_KEYS = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"] as const;
+
+function mediaInfoOf(
+  message: Record<string, unknown> | undefined,
+): { node: Record<string, unknown>; mimeType: string; fileName: string } | null {
+  if (!message) return null;
+  for (const key of MEDIA_KEYS) {
+    const node = message[key] as Record<string, unknown> | undefined;
+    if (!node) continue;
+    const mimeType = typeof node.mimetype === "string" ? node.mimetype : "application/octet-stream";
+    const fileName =
+      (typeof node.fileName === "string" && node.fileName) ||
+      (typeof node.title === "string" && node.title) ||
+      `${key.replace("Message", "")}-${Date.now()}.${extensionFor(mimeType)}`;
+    return { node, mimeType, fileName };
+  }
+  return null;
+}
+
+function extensionFor(mimeType: string): string {
+  const sub = mimeType.split("/")[1]?.split(";")[0];
+  return sub || "bin";
+}
+
+// El base64 puede venir embebido en el propio webhook (base64:true en
+// createInstance) o no — Evolution no siempre lo cumple según el tipo de
+// media y la versión. Cuando no viene inline, se pide aparte por el id del
+// mensaje. Cualquier fallo aquí no debe tumbar el guardado del mensaje: es
+// mejor un mensaje sin adjunto que perder el webhook entero.
+async function captureMedia(
+  instanceName: string,
+  key: EvolutionKey,
+  message: Record<string, unknown> | undefined,
+  orgId: string,
+): Promise<{ mediaUrl: string; mimeType: string; fileName: string } | null> {
+  const info = mediaInfoOf(message);
+  if (!info || !key.id) return null;
+
+  try {
+    const inlineBase64 =
+      (typeof info.node.base64 === "string" && info.node.base64) ||
+      (typeof (message as Record<string, unknown>).base64 === "string"
+        ? ((message as Record<string, unknown>).base64 as string)
+        : "");
+
+    const base64 = inlineBase64 || (await evolution.fetchMediaBase64(instanceName, key.id)).base64;
+    if (!base64) return null;
+
+    const buffer = Buffer.from(base64, "base64");
+    if (buffer.byteLength === 0 || buffer.byteLength > MAX_UPLOAD_BYTES) return null;
+
+    const storage = await getStorage();
+    const uploaded = await storage.upload({
+      buffer,
+      fileName: info.fileName,
+      mimeType: info.mimeType,
+      orgId,
+    });
+
+    return { mediaUrl: uploaded.url, mimeType: uploaded.mimeType, fileName: uploaded.fileName };
+  } catch {
+    return null;
+  }
+}
+
 // ── Entrada principal ───────────────────────────────────────────────────────
 
 export async function handleEvolutionEvent(payload: EvolutionEvent): Promise<void> {
@@ -87,9 +159,33 @@ export async function handleEvolutionEvent(payload: EvolutionEvent): Promise<voi
       await handleMessage(phone, payload.data as EvolutionMessage);
       return;
 
+    // El historial que trae WhatsApp justo después de escanear el QR llega
+    // por este evento en vez de MESSAGES_UPSERT — mismo procesamiento,
+    // mensaje por mensaje, sólo que en lote.
+    case "messages.set":
+    case "MESSAGES_SET":
+      await handleMessagesSet(phone, payload.data);
+      return;
+
     case "messages.update":
     case "MESSAGES_UPDATE":
       await handleAck(phone.orgId, payload.data);
+      return;
+
+    case "contacts.upsert":
+    case "CONTACTS_UPSERT":
+    case "contacts.set":
+    case "CONTACTS_SET":
+      await handleContacts(phone, payload.data);
+      return;
+
+    case "chats.upsert":
+    case "CHATS_UPSERT":
+    case "chats.update":
+    case "CHATS_UPDATE":
+    case "chats.set":
+    case "CHATS_SET":
+      await handleChats(phone.orgId, payload.data);
       return;
 
     case "groups.upsert":
@@ -101,6 +197,56 @@ export async function handleEvolutionEvent(payload: EvolutionEvent): Promise<voi
 
     default:
       return;
+  }
+}
+
+// El historial trae potencialmente cientos de mensajes de golpe — se procesan
+// uno por uno con el mismo handleMessage de siempre (que ya es idempotente
+// por waId) en vez de en paralelo, para no saturar la conexión a la base con
+// un solo scan de QR.
+async function handleMessagesSet(
+  phone: { id: string; orgId: string; instanceName: string },
+  data: unknown,
+) {
+  const raw = data as { messages?: EvolutionMessage[] } | EvolutionMessage[] | undefined;
+  const messages = Array.isArray(raw) ? raw : raw?.messages;
+  if (!messages) return;
+
+  for (const message of messages) {
+    await handleMessage(phone, message);
+  }
+}
+
+async function handleContacts(phone: { orgId: string; instanceName: string }, data: unknown) {
+  const raw = data as
+    | { id?: string; remoteJid?: string; pushName?: string; notify?: string; name?: string }[]
+    | { id?: string; remoteJid?: string; pushName?: string; notify?: string; name?: string }
+    | undefined;
+  const contacts = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+  for (const contact of contacts) {
+    const jid = contact.id ?? contact.remoteJid;
+    if (!jid || isGroupJid(jid)) continue;
+    const pushName = contact.pushName || contact.notify || contact.name;
+    await upsertContact(phone.orgId, jid, pushName, phone.instanceName);
+  }
+}
+
+// Para chats 1:1 sólo importa refrescar el nombre si Evolution trae uno
+// mejor que el provisional ("+58…") — no se crea el chat aquí: eso lo hace
+// upsertChat en cuanto llega el primer mensaje real. Los grupos ya tienen su
+// propio evento (GROUPS_UPSERT) que además trae la foto.
+async function handleChats(orgId: string, data: unknown) {
+  const raw = data as
+    | { id?: string; remoteJid?: string; name?: string }[]
+    | { id?: string; remoteJid?: string; name?: string }
+    | undefined;
+  const chats = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+  for (const chat of chats) {
+    const jid = chat.id ?? chat.remoteJid;
+    if (!jid || isGroupJid(jid) || !chat.name) continue;
+    await prisma.chat.updateMany({ where: { orgId, chatId: jid }, data: { name: chat.name } });
   }
 }
 
@@ -175,7 +321,7 @@ async function handleAck(orgId: string, data: unknown) {
 // ── Mensaje entrante ────────────────────────────────────────────────────────
 
 async function handleMessage(
-  phone: { id: string; orgId: string },
+  phone: { id: string; orgId: string; instanceName: string },
   data: EvolutionMessage | undefined,
 ) {
   const key = data?.key;
@@ -194,7 +340,7 @@ async function handleMessage(
   const timestamp = timestampRaw > 0 ? new Date(timestampRaw * 1000) : new Date();
 
   const chat = await upsertChat(phone, remoteJid, isGroup, data.pushName);
-  if (!fromMe) await upsertContact(phone.orgId, authorJid, data.pushName);
+  if (!fromMe) await upsertContact(phone.orgId, authorJid, data.pushName, phone.instanceName);
 
   // Upsert por waId: cuando enviamos nosotros, la cola ya dejó una fila y el
   // eco de WhatsApp llega después. Sin esto el mensaje saldría dos veces en
@@ -202,6 +348,11 @@ async function handleMessage(
   const existing = await prisma.message.findUnique({
     where: { orgId_waId: { orgId: phone.orgId, waId: key.id } },
   });
+
+  const media =
+    !existing && kind !== "TEXT" && kind !== "LOCATION" && kind !== "CONTACT"
+      ? await captureMedia(phone.instanceName, key, data.message, phone.orgId)
+      : null;
 
   const message = existing
     ? existing
@@ -218,11 +369,15 @@ async function handleMessage(
           body,
           timestamp,
           ack: fromMe ? "SENT" : "DELIVERED",
+          mediaUrl: media?.mediaUrl,
+          mimeType: media?.mimeType,
+          fileName: media?.fileName,
         },
       });
 
   const settings = await prisma.agentSettings.findUnique({
     where: { orgId: phone.orgId },
+    include: { org: { select: { timezone: true } } },
   });
 
   await prisma.chat.update({
@@ -277,8 +432,10 @@ async function handleMessage(
   await maybeRunAi(settings, chat.id, message.id, body);
 }
 
+type AgentSettingsWithOrg = Prisma.AgentSettingsGetPayload<{ include: { org: { select: { timezone: true } } } }>;
+
 async function maybeRunAi(
-  settings: Awaited<ReturnType<typeof prisma.agentSettings.findUnique>>,
+  settings: AgentSettingsWithOrg | null,
   chatId: string,
   messageId: string,
   body: string,
@@ -287,7 +444,17 @@ async function maybeRunAi(
 
   const chat = await prisma.chat.findUnique({
     where: { id: chatId },
-    select: { aiEnabled: true, aiFlagging: true, agentState: true, snoozedUntil: true, phoneId: true },
+    select: {
+      id: true,
+      orgId: true,
+      chatId: true,
+      phoneId: true,
+      aiEnabled: true,
+      aiFlagging: true,
+      agentState: true,
+      snoozedUntil: true,
+      customProps: true,
+    },
   });
   if (!chat) return;
 
@@ -299,6 +466,21 @@ async function maybeRunAi(
 
   if (!settings.enabled) return;
   if (settings.allowedPhoneIds.length > 0 && !settings.allowedPhoneIds.includes(chat.phoneId)) {
+    return;
+  }
+
+  if (
+    !isWithinBusinessHours(
+      {
+        enabled: settings.businessHoursEnabled,
+        start: settings.businessHoursStart,
+        end: settings.businessHoursEnd,
+        days: settings.businessHoursDays,
+      },
+      settings.org.timezone,
+    )
+  ) {
+    await maybeSendAwayMessage(chat, settings.businessHoursAwayMessage);
     return;
   }
 
@@ -317,6 +499,36 @@ async function maybeRunAi(
 
   await prisma.chat.update({ where: { id: chatId }, data: { agentState: "ACTIVE" } });
   await runAgent(chatId);
+}
+
+// Fuera de horario, un solo aviso basta: repetirlo en cada mensaje que llegue
+// mientras el negocio está cerrado sería spam. El último envío se guarda en
+// customProps (no hace falta una columna aparte) y se deja pasar un margen
+// antes de volver a avisar en la misma franja de cierre.
+const AWAY_MESSAGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+async function maybeSendAwayMessage(
+  chat: { id: string; orgId: string; chatId: string; phoneId: string; customProps: unknown },
+  message: string,
+) {
+  if (!message.trim()) return;
+
+  const props = (chat.customProps as Record<string, unknown>) ?? {};
+  const lastAt = typeof props.awayMessageAt === "string" ? new Date(props.awayMessageAt) : null;
+  if (lastAt && Date.now() - lastAt.getTime() < AWAY_MESSAGE_COOLDOWN_MS) return;
+
+  await enqueueMessage({
+    orgId: chat.orgId,
+    phoneId: chat.phoneId,
+    chatJid: chat.chatId,
+    body: message,
+    authorKind: "AI",
+  });
+
+  await prisma.chat.update({
+    where: { id: chat.id },
+    data: { customProps: { ...props, awayMessageAt: new Date().toISOString() } },
+  });
 }
 
 // ── Alta perezosa de chats y contactos ──────────────────────────────────────
@@ -366,7 +578,31 @@ async function upsertChat(
   return chat;
 }
 
-async function upsertContact(orgId: string, jid: string, pushName?: string) {
+async function upsertContact(
+  orgId: string,
+  jid: string,
+  pushName?: string,
+  instanceName?: string,
+) {
+  const existing = await prisma.contact.findUnique({
+    where: { orgId_jid: { orgId, jid } },
+    select: { imageUrl: true },
+  });
+
+  // La foto se pide una sola vez por contacto (mientras no tengamos una ya
+  // guardada) — pedirla en cada mensaje sería un round-trip a Evolution por
+  // nada, y un contacto sin foto de perfil pública fallaría en cada intento.
+  let imageUrl: string | null = null;
+  if (!existing?.imageUrl && instanceName) {
+    try {
+      const result = await evolution.fetchProfilePicture(instanceName, jid);
+      imageUrl = result.profilePictureUrl ?? null;
+    } catch {
+      // Sin foto (privacidad del contacto, número no está en WhatsApp, etc.)
+      // no debe romper el guardado del contacto ni del mensaje que lo trajo.
+    }
+  }
+
   await prisma.contact.upsert({
     where: { orgId_jid: { orgId, jid } },
     create: {
@@ -374,9 +610,13 @@ async function upsertContact(orgId: string, jid: string, pushName?: string) {
       jid,
       pushName: pushName ?? null,
       number: digitsOf(jid),
+      imageUrl,
     },
     // El nombre sólo se refresca si WhatsApp trae uno: sobrescribir con vacío
     // borraría el que un agente escribió a mano en la ficha.
-    update: pushName ? { pushName } : {},
+    update: {
+      ...(pushName ? { pushName } : {}),
+      ...(imageUrl ? { imageUrl } : {}),
+    },
   });
 }

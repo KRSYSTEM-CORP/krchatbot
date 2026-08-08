@@ -130,6 +130,13 @@ registro interno.`,
   return sections.join("\n\n");
 }
 
+// Firma automática: el cliente siempre debe saber que le contesta el asistente
+// automático, no una persona — se antepone al enviar, no se le pide al modelo
+// que se acuerde de hacerlo en cada respuesta.
+function signAsAi(text: string, nickname: string): string {
+  return `🤖 _${nickname}_\n${text}`;
+}
+
 // ── Corrida del agente ──────────────────────────────────────────────────────
 
 export type AgentRunResult = {
@@ -246,7 +253,7 @@ export async function runAgent(chatId: string): Promise<AgentRunResult> {
         orgId: chat.orgId,
         phoneId: chat.phoneId,
         chatJid: chat.chatId,
-        body: finalText,
+        body: signAsAi(finalText, settings.nickname),
         authorKind: "AI",
         delaySeconds: settings.responseDelaySeconds,
       });

@@ -36,6 +36,16 @@ export default async function ChatPage({
 
   if (!chat) notFound();
 
+  const contactImage =
+    chat.type === "USER"
+      ? (
+          await prisma.contact.findUnique({
+            where: { orgId_jid: { orgId: session.orgId, jid: chat.chatId } },
+            select: { imageUrl: true },
+          })
+        )?.imageUrl ?? null
+      : chat.imageUrl;
+
   const [labels, members, settings] = await Promise.all([
     prisma.label.findMany({ where: { orgId: session.orgId }, orderBy: { name: "asc" } }),
     prisma.user.findMany({
@@ -96,6 +106,7 @@ export default async function ChatPage({
         aiFlagging: chat.aiFlagging,
         agentState: chat.agentState,
         snoozedUntil: chat.snoozedUntil?.toISOString() ?? null,
+        imageUrl: contactImage,
       }}
       timeline={timeline}
       labels={labels}
@@ -105,6 +116,7 @@ export default async function ChatPage({
       aiGloballyOn={Boolean(settings?.enabled)}
       aiCanSend={Boolean(settings?.canSendMessages)}
       tickets={chat.tickets}
+      isAdmin={session.role === "ADMIN"}
     />
   );
 }

@@ -43,6 +43,20 @@ export default async function InboxLayout({ children }: { children: React.ReactN
     prisma.label.findMany({ where: { orgId: session.orgId }, orderBy: { name: "asc" } }),
   ]);
 
+  // La foto de un chat 1:1 es la del contacto (mismo jid), no un campo propio
+  // del chat — sólo los grupos tienen su propia imagen (ver handleGroups en
+  // lib/inbound.ts). Se resuelve en un segundo query en vez de una relación
+  // porque Chat.chatId y Contact.jid no tienen una FK entre sí.
+  const userJids = chats.filter((chat) => chat.type === "USER").map((chat) => chat.chatId);
+  const contacts =
+    userJids.length > 0
+      ? await prisma.contact.findMany({
+          where: { orgId: session.orgId, jid: { in: userJids } },
+          select: { jid: true, imageUrl: true },
+        })
+      : [];
+  const imageByJid = new Map(contacts.map((c) => [c.jid, c.imageUrl]));
+
   return (
     <div className="flex h-dvh md:h-screen">
       <ChatList
@@ -57,6 +71,7 @@ export default async function InboxLayout({ children }: { children: React.ReactN
           preview: previewOf(chat.messages[0]),
           phoneLabel: chat.phone.label,
           labels: chat.labels.map((l) => l.label),
+          imageUrl: chat.type === "GROUP" ? chat.imageUrl : (imageByJid.get(chat.chatId) ?? null),
         }))}
         labels={labels}
       />

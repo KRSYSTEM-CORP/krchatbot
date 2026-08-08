@@ -1,11 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Search, Users, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatChatStamp } from "@/lib/format";
+
+// El webhook de Evolution deja el mensaje en la base al instante, pero un
+// Server Component sólo lo muestra cuando se vuelve a renderizar — sin esto,
+// la bandeja se queda congelada hasta que alguien navega o recarga a mano.
+// router.refresh() re-pide los Server Components sin perder el estado del
+// cliente (el filtro, el texto buscado); se detiene si la pestaña está en
+// segundo plano para no gastar cuota en balde.
+const LIST_REFRESH_MS = 5000;
+
+function useLiveRefresh(intervalMs: number) {
+  const router = useRouter();
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [router, intervalMs]);
+}
 
 export type ChatRow = {
   id: string;
@@ -18,6 +36,7 @@ export type ChatRow = {
   preview: string;
   phoneLabel: string;
   labels: { id: string; name: string; color: string }[];
+  imageUrl: string | null;
 };
 
 type Filter = "all" | "unread" | "groups" | "ai";
@@ -38,6 +57,7 @@ export function ChatList({
 }) {
   const params = useParams<{ chatId?: string }>();
   const activeId = params?.chatId;
+  useLiveRefresh(LIST_REFRESH_MS);
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -127,13 +147,22 @@ export function ChatList({
                     activeId === chat.id && "bg-secondary",
                   )}
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
-                    {chat.type === "GROUP" ? (
-                      <Users className="h-4 w-4" />
-                    ) : (
-                      chat.name.slice(0, 2).toUpperCase()
-                    )}
-                  </div>
+                  {chat.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- URL de WhatsApp/R2, no un dominio configurado en next/image
+                    <img
+                      src={chat.imageUrl}
+                      alt=""
+                      className="h-10 w-10 shrink-0 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
+                      {chat.type === "GROUP" ? (
+                        <Users className="h-4 w-4" />
+                      ) : (
+                        chat.name.slice(0, 2).toUpperCase()
+                      )}
+                    </div>
+                  )}
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">

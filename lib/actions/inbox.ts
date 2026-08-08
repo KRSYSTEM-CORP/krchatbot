@@ -308,6 +308,24 @@ export async function reactToMessage(
   return OK;
 }
 
+// Marcar/desmarcar a mano desde el menú del mensaje — independiente del
+// marcado automático que hace la IA (ver flagMessage en lib/ai/agent.ts).
+export async function toggleMessageFlag(chatId: string, messageId: string): Promise<FormState> {
+  const { chat } = await authorizeChat(chatId);
+  if (!chat) return fail("No tienes acceso a este chat");
+
+  const message = await prisma.message.findFirst({ where: { id: messageId, chatId: chat.id } });
+  if (!message) return fail("Mensaje no encontrado");
+
+  await prisma.message.update({
+    where: { id: messageId },
+    data: { isFlagged: !message.isFlagged, flagReason: message.isFlagged ? null : "Marcado a mano" },
+  });
+
+  revalidatePath(`/inbox/${chatId}`);
+  return OK;
+}
+
 // ── Asistencia al agente humano ─────────────────────────────────────────────
 
 // Resume el hilo y propone una respuesta. No la envía: la revisa una persona.
