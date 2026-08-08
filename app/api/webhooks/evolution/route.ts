@@ -6,6 +6,10 @@ import { handleEvolutionEvent, type EvolutionEvent } from "@/lib/inbound";
 // el secreto compartido que se configura al crear cada instancia.
 
 export const dynamic = "force-dynamic";
+// Los eventos normales tardan milisegundos, pero un *_SET de historial grande
+// (ver lib/inbound.ts, MAX_SET_MESSAGES) puede tardar más — este techo le da
+// margen sin dejarlo correr indefinido.
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const expected = process.env.EVOLUTION_WEBHOOK_SECRET;

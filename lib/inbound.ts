@@ -200,10 +200,24 @@ export async function handleEvolutionEvent(payload: EvolutionEvent): Promise<voi
   }
 }
 
-// El historial trae potencialmente cientos de mensajes de golpe — se procesan
-// uno por uno con el mismo handleMessage de siempre (que ya es idempotente
-// por waId) en vez de en paralelo, para no saturar la conexión a la base con
-// un solo scan de QR.
+// El historial de una cuenta real puede traer decenas de miles de mensajes
+// de golpe (confirmado en producción: un solo reconexión llegó a mandar
+// ~20,000 mensajes y ~3,000 contactos en un mismo webhook) — procesarlo
+// entero de un tirón siempre se pasa del límite de tiempo de una función
+// serverless, Evolution nunca recibe el 200 a tiempo, reintenta 10 veces
+// durante media hora y al final se da por vencido sin haber completado nada.
+// El tope no es una limitación de este código: es que un webhook síncrono
+// nunca es el lugar correcto para un historial de ese tamaño. Se procesan
+// los más recientes (los últimos del arreglo) y el resto se deja fuera —
+// es la parte que de verdad importa para dar contexto a una conversación.
+const MAX_SET_MESSAGES = 200;
+const MAX_SET_CONTACTS = 300;
+const MAX_SET_CHATS = 300;
+
+function capToRecent<T>(items: T[], max: number): T[] {
+  return items.length > max ? items.slice(items.length - max) : items;
+}
+
 async function handleMessagesSet(
   phone: { id: string; orgId: string; instanceName: string },
   data: unknown,
@@ -212,7 +226,7 @@ async function handleMessagesSet(
   const messages = Array.isArray(raw) ? raw : raw?.messages;
   if (!messages) return;
 
-  for (const message of messages) {
+  for (const message of capToRecent(messages, MAX_SET_MESSAGES)) {
     await handleMessage(phone, message);
   }
 }
@@ -222,13 +236,19 @@ async function handleContacts(phone: { orgId: string; instanceName: string }, da
     | { id?: string; remoteJid?: string; pushName?: string; notify?: string; name?: string }[]
     | { id?: string; remoteJid?: string; pushName?: string; notify?: string; name?: string }
     | undefined;
-  const contacts = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const all = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const contacts = capToRecent(all, MAX_SET_CONTACTS);
 
   for (const contact of contacts) {
     const jid = contact.id ?? contact.remoteJid;
     if (!jid || isGroupJid(jid)) continue;
     const pushName = contact.pushName || contact.notify || contact.name;
-    await upsertContact(phone.orgId, jid, pushName, phone.instanceName);
+    // Sin foto aquí: un sync trae cientos/miles de contactos de golpe y cada
+    // foto es un viaje aparte a la API de Evolution — eso es lo que de verdad
+    // volvía impagable el tiempo de esta función. La foto igual se completa
+    // sola en cuanto ese contacto escriba un mensaje real (ver handleMessage
+    // → upsertContact), que es un ritmo natural, no una ráfaga de miles.
+    await upsertContact(phone.orgId, jid, pushName, undefined);
   }
 }
 
@@ -241,7 +261,8 @@ async function handleChats(orgId: string, data: unknown) {
     | { id?: string; remoteJid?: string; name?: string }[]
     | { id?: string; remoteJid?: string; name?: string }
     | undefined;
-  const chats = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const all = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const chats = capToRecent(all, MAX_SET_CHATS);
 
   for (const chat of chats) {
     const jid = chat.id ?? chat.remoteJid;
