@@ -255,9 +255,10 @@ Nunca inventes datos (precios, plazos, políticas) que no estén en la pregunta,
 }
 
 // "Mejorar respuesta": desde el menú de un mensaje en el inbox, un agente
-// corrige lo que la IA debió responder. A diferencia del auto-entrenamiento
-// semanal (que infiere y pide revisión), esto lo escribió una persona a
-// propósito — entra ACTIVA de una vez, sin pasar por NEEDS_REVIEW.
+// corrige lo que la IA debió responder. Entra directo como FAQ (no como
+// "Aprendida"): lo escribió y aprobó una persona a propósito, así que es
+// contenido de primera categoría — debe verse junto a las demás FAQ, activo
+// de una vez, sin pasar por NEEDS_REVIEW.
 export async function trainFromMessage(question: string, answer: string): Promise<FormState> {
   const session = await requireAdmin();
 
@@ -269,7 +270,7 @@ export async function trainFromMessage(question: string, answer: string): Promis
   await prisma.knowledgeItem.create({
     data: {
       orgId: session.orgId,
-      source: "SELF_LEARNED",
+      source: "FAQ",
       status: "ACTIVE",
       question: q,
       answer: a,
