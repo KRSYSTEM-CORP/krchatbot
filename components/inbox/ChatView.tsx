@@ -50,7 +50,7 @@ import {
   polishText,
   toggleMessageFlag,
 } from "@/lib/actions/inbox";
-import { trainFromMessage } from "@/lib/actions/ai";
+import { trainFromMessage, draftImprovedAnswer } from "@/lib/actions/ai";
 import type { FormState } from "@/lib/validations";
 
 type MessageItem = {
@@ -1117,9 +1117,12 @@ function MessageMenu({
   );
 }
 
-// Panel para corregir lo que la IA debió responder — la corrección se guarda
-// tal cual en la base de conocimiento (source SELF_LEARNED, ya ACTIVA: la
-// escribió una persona a propósito, no hace falta revisarla después).
+// Panel para corregir lo que la IA debió responder. No es un formulario en
+// blanco: el equipo escribe la corrección en lenguaje natural ("debiste
+// decir que no hacemos envíos los domingos") y una segunda pasada de IA (ver
+// draftImprovedAnswer, lib/actions/ai.ts) redacta la entrada de conocimiento
+// — pregunta con variantes + respuesta pulida — lista para revisar. Guardar
+// sigue siendo un gesto humano: la IA propone, la persona decide.
 function ImproveAnswerModal({
   question,
   answer,
@@ -1131,46 +1134,105 @@ function ImproveAnswerModal({
   onCancel: () => void;
   onSave: (question: string, answer: string) => void;
 }) {
-  const [q, setQ] = useState(question);
-  const [a, setA] = useState(answer);
+  const [guidance, setGuidance] = useState("");
+  const [draftQuestion, setDraftQuestion] = useState("");
+  const [draftAnswer, setDraftAnswer] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [generating, startGenerating] = useTransition();
+
+  function generate() {
+    setError(null);
+    startGenerating(async () => {
+      const result = await draftImprovedAnswer(question, answer, guidance);
+      if (!result.ok) {
+        setError(result.error ?? "No se pudo generar la propuesta");
+        return;
+      }
+      setDraftQuestion(result.question ?? "");
+      setDraftAnswer(result.answer ?? "");
+    });
+  }
+
+  const hasDraft = Boolean(draftQuestion.trim() && draftAnswer.trim());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md space-y-4 rounded-xl border border-border bg-card p-4 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-xl">
         <div className="flex items-center gap-2">
           <GraduationCap className="h-5 w-5 text-primary" />
           <h3 className="font-medium">Mejorar respuesta con IA</h3>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Esto se guarda directo en la base de conocimiento (Conocimiento → Aprendidas) y la IA lo
-          usará la próxima vez que le pregunten algo parecido.
-        </p>
 
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">Pregunta del cliente</label>
-          <textarea
-            value={q}
-            onChange={(event) => setQ(event.target.value)}
-            rows={2}
-            className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+        <div className="space-y-1 rounded-md bg-muted/60 p-2.5 text-xs">
+          <p>
+            <span className="font-medium text-muted-foreground">Pregunta original: </span>
+            {question || "(no disponible)"}
+          </p>
+          <p>
+            <span className="font-medium text-muted-foreground">Respuesta que dio: </span>
+            {answer || "(no respondió)"}
+          </p>
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">Respuesta correcta</label>
+          <label className="text-xs font-medium text-muted-foreground">
+            ¿Qué debió responder o qué hay que corregir?
+          </label>
           <textarea
-            value={a}
-            onChange={(event) => setA(event.target.value)}
-            rows={4}
+            value={guidance}
+            onChange={(event) => setGuidance(event.target.value)}
+            rows={3}
+            placeholder="Ej: debiste aclarar que los envíos a otras ciudades tardan de 2 a 4 días hábiles."
             className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={generate}
+            disabled={generating || !guidance.trim()}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            {generating ? "Generando…" : hasDraft ? "Generar de nuevo" : "Generar con IA"}
+          </Button>
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </div>
+
+        {hasDraft ? (
+          <>
+            <div className="space-y-1.5 border-t border-border pt-3">
+              <label className="text-xs font-medium text-muted-foreground">
+                Pregunta (para la base de conocimiento)
+              </label>
+              <textarea
+                value={draftQuestion}
+                onChange={(event) => setDraftQuestion(event.target.value)}
+                rows={3}
+                className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Respuesta correcta</label>
+              <textarea
+                value={draftAnswer}
+                onChange={(event) => setDraftAnswer(event.target.value)}
+                rows={5}
+                className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+          </>
+        ) : null}
 
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onCancel}>
             Cancelar
           </Button>
-          <Button type="button" onClick={() => onSave(q, a)} disabled={!q.trim() || !a.trim()}>
+          <Button
+            type="button"
+            onClick={() => onSave(draftQuestion, draftAnswer)}
+            disabled={!hasDraft}
+          >
             Guardar
           </Button>
         </div>

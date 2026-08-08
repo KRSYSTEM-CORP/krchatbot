@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
 import { runSelfTraining } from "@/lib/ai/training";
 import { chunkText } from "@/lib/ai/knowledge";
+import { getAiProvider, REPLY_EFFORT } from "@/lib/ai/client";
 import {
   agentSettingsSchema,
   personalizationSchema,
@@ -200,6 +201,57 @@ export async function importKnowledgeFromPdf(_prev: FormState, formData: FormDat
     ok: true,
     message: `${chunks.length} fragmento(s) importados desde "${documentName}" — quedaron por revisar antes de activarse`,
   };
+}
+
+const IMPROVE_SCHEMA = {
+  type: "object",
+  properties: {
+    pregunta: { type: "string" },
+    respuesta: { type: "string" },
+  },
+  required: ["pregunta", "respuesta"],
+  additionalProperties: false,
+} as const;
+
+// "Mejorar respuesta con IA": no es sólo un formulario — una segunda pasada
+// de IA (la "maestra") toma la pregunta original, lo que el asistente
+// respondió (si respondió) y la guía en lenguaje natural que escribe la
+// persona ("debiste decir X", "falta aclarar Y") y redacta la entrada de
+// conocimiento lista para guardar: pregunta con variantes + respuesta
+// pulida. La persona la revisa y ajusta antes de guardar — la IA propone,
+// el equipo decide, mismo principio que draftReply más abajo.
+export async function draftImprovedAnswer(
+  originalQuestion: string,
+  originalAnswer: string,
+  guidance: string,
+): Promise<FormState & { question?: string; answer?: string }> {
+  await requireAdmin();
+  if (!guidance.trim()) return fail("Escribe qué debió responder o qué corregir");
+
+  try {
+    const provider = await getAiProvider();
+    const result = await provider.classify<{ pregunta?: string; respuesta?: string }>({
+      system: `Eres el editor maestro de la base de conocimiento de un asistente de WhatsApp para un negocio.
+Te dan: la pregunta que hizo un cliente, lo que el asistente respondió (puede venir vacío si no respondió),
+y la corrección que escribe el equipo humano. Tu trabajo es redactar la entrada de conocimiento definitiva:
+
+- "pregunta": la pregunta del cliente reescrita con 2 o 3 variantes de cómo alguien la preguntaría, una por línea (mismo formato que las FAQs existentes).
+- "respuesta": la respuesta correcta y completa, en el tono de WhatsApp (mensajes claros, sin markdown), incorporando la corrección del equipo. Si la corrección ya trae el texto exacto a usar, respétalo; si es sólo una indicación ("aclara que no hacemos envíos los domingos"), redacta la respuesta completa tú.
+
+Nunca inventes datos (precios, plazos, políticas) que no estén en la pregunta, la respuesta original o la corrección.`,
+      message: `Pregunta del cliente:\n${originalQuestion || "(no disponible)"}\n\nRespuesta del asistente (si la hubo):\n${originalAnswer || "(no respondió)"}\n\nCorrección del equipo:\n${guidance}`,
+      schema: IMPROVE_SCHEMA,
+      effort: REPLY_EFFORT,
+    });
+
+    if (!result?.pregunta || !result?.respuesta) {
+      return fail("La IA no devolvió una propuesta utilizable — ajusta la corrección e intenta de nuevo");
+    }
+
+    return { ok: true, question: result.pregunta, answer: result.respuesta };
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "La IA no respondió");
+  }
 }
 
 // "Mejorar respuesta": desde el menú de un mensaje en el inbox, un agente

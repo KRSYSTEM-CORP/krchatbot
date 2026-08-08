@@ -495,9 +495,20 @@ async function maybeRunAi(
   }
 
   if (!body.trim()) return;
-  if (!(await shouldActivate(body, settings.activationPrompt))) return;
 
-  await prisma.chat.update({ where: { id: chatId }, data: { agentState: "ACTIVE" } });
+  // En AUTO la promesa es "responde sola, sin que nadie tenga que darle a
+  // Responder" — por eso aquí NO se filtra con shouldActivate() (esa
+  // clasificación extra es exactamente lo que hacía que a veces, en
+  // silencio, no contestara nada y un humano tuviera que intervenir sin
+  // saber por qué). El botón manual (triggerAiReply, lib/actions/inbox.ts)
+  // nunca pasó por ese filtro; ahora el disparo automático hace lo mismo.
+  // MANUAL sigue siendo más conservador a propósito: sólo entra si el
+  // mensaje realmente parece necesitar respuesta.
+  if (settings.activation === "MANUAL" && !(await shouldActivate(body, settings.activationPrompt))) {
+    return;
+  }
+
+  await prisma.chat.update({ where: { id: chatId }, data: { agentState: "ACTIVE", snoozedUntil: null } });
   await runAgent(chatId);
 }
 
