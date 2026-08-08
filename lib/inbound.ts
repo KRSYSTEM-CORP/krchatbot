@@ -455,6 +455,11 @@ async function handleMessage(
 
 type AgentSettingsWithOrg = Prisma.AgentSettingsGetPayload<{ include: { org: { select: { timezone: true } } } }>;
 
+// Ventana de espera antes de generar: suficiente para que un cliente termine
+// de mandar un pensamiento partido en varios globos, corta para que no se
+// sienta lenta.
+const DEBOUNCE_MS = 6000;
+
 async function maybeRunAi(
   settings: AgentSettingsWithOrg | null,
   chatId: string,
@@ -528,6 +533,24 @@ async function maybeRunAi(
   if (settings.activation === "MANUAL" && !(await shouldActivate(body, settings.activationPrompt))) {
     return;
   }
+
+  // Nadie escribe su pregunta en un solo mensaje — manda "Buenas tardes" y
+  // el motivo real dos globos después. Sin esto, cada mensaje del mismo
+  // arrebato dispara su propia corrida completa del agente (confirmado en
+  // conversaciones reales: el cliente saluda y pregunta en dos mensajes
+  // seguidos, y la IA contesta dos veces, una por cada uno, pisándose). Se
+  // espera un respiro y, si mientras tanto llegó un mensaje más nuevo de
+  // este mismo cliente, esta corrida se cede a la que ese mensaje disparó
+  // — que a su vez repite el mismo chequeo, así que sólo sobrevive la del
+  // último mensaje del arrebato, y esa ve todo el arrebato como contexto
+  // (runAgent arma el historial fresco al momento de correr, no antes).
+  await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS));
+  const latestInbound = await prisma.message.findFirst({
+    where: { chatId, fromMe: false },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  if (latestInbound && latestInbound.id !== messageId) return;
 
   await prisma.chat.update({ where: { id: chatId }, data: { agentState: "ACTIVE", snoozedUntil: null } });
   await runAgent(chatId);
