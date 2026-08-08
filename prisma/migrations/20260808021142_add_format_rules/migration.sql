@@ -1,0 +1,1 @@
+ALTER TABLE "AgentSettings" ADD COLUMN "formatRules" TEXT NOT NULL DEFAULT '';

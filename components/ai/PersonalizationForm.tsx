@@ -20,6 +20,7 @@ export function PersonalizationForm({
     restrictions: string;
     personality: string;
     activationPrompt: string;
+    formatRules: string;
     ticketRules: string;
     privateNoteRules: string;
     flaggingPrompt: string;
@@ -74,6 +75,19 @@ export function PersonalizationForm({
               defaultValue={values.personality}
               rows={3}
               placeholder="Cálido y directo. Tutea. Mensajes de dos o tres líneas, sin formalismos."
+            />
+          </Field>
+
+          <Field
+            label="Formato obligatorio de las respuestas"
+            hint='Qué debe ir siempre estructurado y cómo — la IA ya separa tipos de información con *negrita* y viñetas por defecto, pero cada negocio maneja datos distintos (presupuestos, perfiles, horarios…). Sé específico: qué bloques van siempre, en qué orden, y con qué encabezado exacto.'
+          >
+            <Textarea
+              name="formatRules"
+              defaultValue={values.formatRules}
+              rows={8}
+              className="font-mono text-xs"
+              placeholder={PLACEHOLDER_FORMAT}
             />
           </Field>
         </Card>
@@ -148,6 +162,24 @@ export function PersonalizationForm({
     </form>
   );
 }
+
+const PLACEHOLDER_FORMAT = `Cuando la respuesta incluya precios o varios servicios, estructúrala así (un bloque por tipo de información, con una línea en blanco entre cada uno):
+
+*Presupuesto:*
+- Servicio A: 30 EUR
+- Servicio B: 20 EUR
+
+*Requisitos:*
+- Lo que debe traer o preparar el cliente.
+
+*Total: 50 EUR*
+
+Cierra siempre con estos tres bloques, cada uno en su propia línea:
+*Ubicación:* [dirección]
+*Horario de Atención:* [horario]
+*Tasa de Cambio:* [política de precio/moneda]
+
+En mensajes simples (saludos, confirmaciones, cuando escalas a una persona) no fuerces esta estructura — ve directo, sin encabezados.`;
 
 const PLACEHOLDER_ROLE = `Rol e identidad
 

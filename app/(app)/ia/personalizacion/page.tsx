@@ -20,6 +20,7 @@ export default async function PersonalizationPage() {
         restrictions: settings.restrictions,
         personality: settings.personality,
         activationPrompt: settings.activationPrompt,
+        formatRules: settings.formatRules,
         ticketRules: settings.ticketRules,
         privateNoteRules: settings.privateNoteRules,
         flaggingPrompt: settings.flaggingPrompt,

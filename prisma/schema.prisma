@@ -663,6 +663,11 @@ model AgentSettings {
   restrictions     String @default("")
   personality      String @default("Cálido, claro y directo. Respuestas breves.")
   activationPrompt String @default("")
+  // Qué debe ir SIEMPRE estructurado (ej. "en presupuestos, separa cada
+  // examen con su precio en una línea, y cierra con Ubicación/Horario/Tasa
+  // en negrita, cada uno en su propio bloque") — lo define cada negocio
+  // porque cada uno maneja tipos de información distintos.
+  formatRules      String @default("")
 
   // Reglas en lenguaje natural para las herramientas nativas.
   ticketRules      String @default("")

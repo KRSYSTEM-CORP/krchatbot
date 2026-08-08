@@ -97,6 +97,7 @@ export const personalizationSchema = z.object({
   restrictions: z.string().max(8000).default(""),
   personality: z.string().max(2000).default(""),
   activationPrompt: z.string().max(4000).default(""),
+  formatRules: z.string().max(4000).default(""),
   ticketRules: z.string().max(4000).default(""),
   privateNoteRules: z.string().max(4000).default(""),
   flaggingPrompt: z.string().max(4000).default(""),
