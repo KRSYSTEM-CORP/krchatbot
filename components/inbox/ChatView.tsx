@@ -371,8 +371,10 @@ export function ChatView({
                     new Date(item.at).toDateString() !==
                       new Date(timeline[index - 1].at).toDateString()
                   }
+                  isAdmin={isAdmin}
                   onReact={(emoji) => react(item.id, emoji)}
                   onMenu={(messageItem, x, y) => setMenuFor({ item: messageItem, x, y })}
+                  onImprove={(messageItem) => openImprove(messageItem)}
                 />
               ))
             )}
@@ -807,15 +809,19 @@ function TimelineRow({
   quoted,
   aiNickname,
   showDate,
+  isAdmin,
   onReact,
   onMenu,
+  onImprove,
 }: {
   item: TimelineItem;
   quoted?: MessageItem;
   aiNickname: string;
   showDate: boolean;
+  isAdmin: boolean;
   onReact: (emoji: string) => void;
   onMenu: (item: MessageItem, x: number, y: number) => void;
+  onImprove: (item: MessageItem) => void;
 }) {
   const at = new Date(item.at);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -911,6 +917,15 @@ function TimelineRow({
                   <span title={item.flagReason ?? "Marcado como importante"}>
                     <Flag className="h-3 w-3 text-[var(--warning)]" />
                   </span>
+                ) : null}
+                {isAdmin && item.authorKind === "AI" ? (
+                  <button
+                    type="button"
+                    onClick={() => onImprove(item)}
+                    className="mr-1 font-medium text-primary hover:underline"
+                  >
+                    Mejorar respuesta
+                  </button>
                 ) : null}
                 {formatTime(at)}
                 {item.fromMe ? (

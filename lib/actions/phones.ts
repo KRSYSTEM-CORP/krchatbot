@@ -2,9 +2,23 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/session";
+import { requireAdmin, requireSession } from "@/lib/session";
 import * as evolution from "@/lib/evolution";
 import { phoneSchema, fail, firstIssue, OK, type FormState } from "@/lib/validations";
+
+// Para el aviso global (ver PhoneStatusBanner) — cualquiera del equipo debe
+// saber si el bot está caído, no sólo el admin que puede reconectarlo.
+export async function getPhoneStatus(): Promise<{ hasPhones: boolean; allDisconnected: boolean }> {
+  const session = await requireSession();
+  const phones = await prisma.phone.findMany({
+    where: { orgId: session.orgId },
+    select: { status: true },
+  });
+  return {
+    hasPhones: phones.length > 0,
+    allDisconnected: phones.length > 0 && phones.every((p) => p.status !== "CONNECTED"),
+  };
+}
 
 // Conectar un número es crear una instancia en Evolution y esperar a que
 // alguien escanee el QR desde el teléfono. El QR llega por webhook

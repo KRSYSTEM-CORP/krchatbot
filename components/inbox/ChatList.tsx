@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Search, Users, Sparkles } from "lucide-react";
+import { Search, Users, Sparkles, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatChatStamp } from "@/lib/format";
+import { toggleChatLabel } from "@/lib/actions/inbox";
 
 // El webhook de Evolution deja el mensaje en la base al instante, pero un
 // Server Component sólo lo muestra cuando se vuelve a renderizar — sin esto,
@@ -62,6 +63,9 @@ export function ChatList({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [labelId, setLabelId] = useState<string>("");
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -74,6 +78,13 @@ export function ChatList({
       return true;
     });
   }, [chats, query, filter, labelId]);
+
+  function toggleLabel(chatId: string, id: string) {
+    startTransition(async () => {
+      await toggleChatLabel(chatId, id);
+      router.refresh();
+    });
+  }
 
   return (
     // En el teléfono la lista ocupa la pantalla completa y desaparece al abrir
@@ -139,7 +150,7 @@ export function ChatList({
         ) : (
           <ul>
             {visible.map((chat) => (
-              <li key={chat.id}>
+              <li key={chat.id} className="relative">
                 <Link
                   href={`/inbox/${chat.id}`}
                   className={cn(
@@ -190,24 +201,69 @@ export function ChatList({
                       ) : null}
                     </div>
 
-                    {chat.labels.length > 0 ? (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {chat.labels.slice(0, 3).map((label) => (
-                          <span
-                            key={label.id}
-                            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                            style={{
-                              backgroundColor: `${label.color}22`,
-                              color: label.color,
-                            }}
-                          >
-                            {label.name}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {chat.labels.slice(0, 3).map((label) => (
+                        <span
+                          key={label.id}
+                          className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                          style={{
+                            backgroundColor: `${label.color}22`,
+                            color: label.color,
+                          }}
+                        >
+                          {label.name}
+                        </span>
+                      ))}
+                      {labels.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setPickerFor((current) => (current === chat.id ? null : chat.id));
+                          }}
+                          className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent"
+                        >
+                          <Plus className="h-2.5 w-2.5" />
+                          Etiqueta
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </Link>
+
+                {pickerFor === chat.id ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-hidden
+                      tabIndex={-1}
+                      className="fixed inset-0 z-30 cursor-default"
+                      onClick={() => setPickerFor(null)}
+                    />
+                    <div className="absolute right-3 top-full z-40 mt-1 w-48 rounded-lg border border-border bg-card p-1.5 shadow-lg">
+                      {labels.map((label) => {
+                        const active = chat.labels.some((l) => l.id === label.id);
+                        return (
+                          <button
+                            key={label.id}
+                            type="button"
+                            disabled={pending}
+                            onClick={() => toggleLabel(chat.id, label.id)}
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent"
+                          >
+                            <span
+                              className="h-2 w-2 shrink-0 rounded-full"
+                              style={{ backgroundColor: label.color }}
+                            />
+                            <span className="min-w-0 flex-1 truncate">{label.name}</span>
+                            {active ? <X className="h-3 w-3 shrink-0 text-muted-foreground" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : null}
               </li>
             ))}
           </ul>
