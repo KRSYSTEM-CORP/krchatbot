@@ -43,6 +43,33 @@ requests), así que Evolution API vive aparte, en un servidor propio.
   esta llave con un token de cuenta normal, es una acción que exige entrar
   al dashboard.
 
+## Disparador del cron cada minuto (Cloudflare Worker)
+
+- **Por qué existe**: `/api/cron` (drena la cola de mensajes salientes,
+  despierta chats en snooze vencido, arranca envíos programados — ver
+  `app/api/cron/route.ts`) necesita correr cada minuto, pero el plan de
+  Vercel en uso sólo permite cron nativo una vez al día. Sin este disparador,
+  un mensaje encolado por la IA se queda esperando hasta que alguien haga
+  otra acción en la bandeja por coincidencia — se confirmó en producción un
+  promedio real de 114s (hasta 183s) antes de que esto existiera.
+- **Dónde**: Cloudflare Worker `krchatbot-drain-queue`, misma cuenta que R2
+  (`04ecc0dde2eb8b4d4782f0b05d8cf541`), con un Cron Trigger `* * * * *`.
+  Se probó primero con GitHub Actions (`schedule: "* * * * *"`), pero
+  GitHub despriorizó el evento en la práctica hasta disparar cada ~1-1.5h en
+  vez de cada minuto — problema documentado de la plataforma, no de la
+  configuración. Cloudflare Cron Triggers sí cumplen el minuto.
+- **Qué hace**: un `scheduled()` handler que llama a
+  `POST https://krchatbot.krsystem-corp.com/api/cron` con
+  `Authorization: Bearer <CRON_SECRET>`. El secreto vive como Worker Secret
+  (`wrangler secret` / API, no en el código) y por separado como variable de
+  entorno `CRON_SECRET` en Vercel — deben coincidir; si se rota uno hay que
+  rotar el otro.
+- **Para editarlo**: no hay `wrangler.toml` en este repo (se desplegó vía
+  API directamente, sin ese archivo) — el script vive sólo en el dashboard
+  de Cloudflare (Workers & Pages → `krchatbot-drain-queue`). Para cambios
+  futuros, lo más simple es editar ahí directamente o recrear el Worker
+  desde cero con la API si hace falta versionarlo.
+
 ## Base de datos y la app en sí
 
 Ver el resto de `docs/` — `facturacion.md` cubre el modelo de cobro,
